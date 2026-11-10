@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Local runtime data and env files (never commit)
+.xlt/
+.env
+.env.*
+
+# Secrets and certificates
+*.webhook
+*.webhook.txt
+*.key
+*.crt
+*.pem
+*.p12
+*.pfx
+
+# e2e runtime output (scripts stay; workdirs and logs do not)
+e2e/work/
+e2e/work-*/
+e2e/saved-logs/
+e2e/mac-*.log
+e2e/last-run.log
+e2e/last-report.md
+
+# Local-only test fixtures
+grok-test/
+.demo/
+
+# OS / editor
+.DS_Store
+._*
+.idea/
+.vscode/

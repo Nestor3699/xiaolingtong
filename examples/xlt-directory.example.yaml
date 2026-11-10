@@ -1,0 +1,54 @@
+# 成员名单样例。指纹还是空的，不要直接拿去当真名单。
+# 每人在自己电脑上 xlt init，把打印出来的指纹和 .crt 交给 Nes，再 xlt trust。
+version: 1
+agents:
+  - name: nes-mac
+    owner: Nes
+    person: nes
+    os: macos
+    lan_ip: 192.168.1.21
+    port: 47800
+    cert_sha256: "（待补）"
+    tailscale_ip: ""
+    ai_tools: [claude-code, deepseek-harness, codex, grok-bot, pi]
+    primary: true
+  - name: leo-mac
+    owner: 沈总 Leo
+    person: leo
+    os: macos
+    lan_ip: 192.168.1.23
+    port: 47800
+    cert_sha256: "（待补）"
+    tailscale_ip: ""
+    ai_tools: [claude-code, deepseek-harness, codex, grok-bot, pi]
+    primary: true
+  - name: runda-mac
+    owner: 润达 Runda
+    person: runda
+    os: macos
+    lan_ip: 192.168.1.24
+    port: 47800
+    cert_sha256: "（待补）"
+    tailscale_ip: ""
+    ai_tools: [claude-code, deepseek-harness, codex, grok-bot, pi]
+    primary: true
+  - name: haonian-win
+    owner: 浩年 Haonian
+    person: haonian
+    os: windows
+    lan_ip: 192.168.1.22
+    port: 47800
+    cert_sha256: "（待补）"
+    tailscale_ip: ""
+    ai_tools: [claude-code, deepseek-harness, codex, grok-bot, pi]
+    primary: true
+  - name: mario-win
+    owner: 博洋 Mario
+    person: mario
+    os: windows
+    lan_ip: 192.168.1.25
+    port: 47800
+    cert_sha256: "（待补）"
+    tailscale_ip: ""
+    ai_tools: [claude-code, deepseek-harness, codex, grok-bot, pi]
+    primary: true
