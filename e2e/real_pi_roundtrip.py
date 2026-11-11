@@ -204,11 +204,6 @@ def main() -> int:
         )
         if t1.returncode != 0 or t2.returncode != 0:
             raise Fail("trust 失败: " + (t1.stderr or "") + (t2.stderr or ""))
-        (hao / "policy.yaml").write_text(
-            "version: 1\nowner: haonian\ndefault: deny\nmode: normal\n"
-            "grants:\n  - id: g1\n    grantees: [nes]\n    operations: [ask, notify]\n",
-            encoding="utf-8",
-        )
         r1 = xlt(hao, "register", "--agent", "pi", "--window", "main", "--delivery", "extension")
         if r1.returncode != 0:
             raise Fail("register 失败: " + (r1.stderr or r1.stdout))

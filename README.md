@@ -25,7 +25,7 @@ python3 -m venv ~/.xlt/venv
 
 然后打开 [本机状态页](http://127.0.0.1:47321)。页面只在这台电脑上，别人从局域网打不开。
 
-`xlt init` 会打印证书指纹。把 **`.crt` 文件和指纹** 交给 Nes。**`.key` 私钥不要发给任何人。**
+`xlt init` 会打印证书指纹。请把 **`.crt` 文件和指纹** 发到团队群或共享文件夹，让每位同事用 `xlt trust` 登记；你也要登记他们的（必须双向）。**`.key` 私钥不要发给任何人。**
 
 Windows 上把 `python3` 换成 `py -3`，目录是 `%USERPROFILE%\.xlt`。
 
@@ -74,7 +74,7 @@ url=https://...
 key=crsr_...
 ```
 
-权限在 `~/.xlt/policy.yaml`，默认全部拒绝。格式和方案 §5.5 一样。`xlt policy check` 会看一眼有没有把密钥目录写进允许列表。
+权限在 `~/.xlt/policy.yaml`，默认全部拒绝。`xlt trust` 登记同事时会自动授予普通写信权限（`ask` / `notify` / `reply`）；读文件、列目录、搜索仍须另行授权。已有安装可再跑一次 `xlt trust`，或执行 `xlt policy grant-trusted`。格式和方案 §5.5 一样。`xlt policy check` 会看一眼有没有把密钥目录写进允许列表。不想自动授权时用 `xlt trust --no-grant`。
 
 ## 五种 AI 怎么交到信
 

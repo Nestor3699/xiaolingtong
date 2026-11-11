@@ -202,3 +202,165 @@ def check_file(policy_doc: dict) -> list[str]:
             except ValueError:
                 problems.append(f"授权 {gid} 的 valid_until 不是时间")
     return problems
+
+
+# 普通写信（登记同事时自动授予）。读文件 / 列目录 / 搜索仍须主人另行授权。
+LETTER_OPS = ("ask", "notify", "reply")
+FILE_OPS = ("list", "read", "search")
+AUTO_GRANT_PREFIX = "g-trust-"
+
+
+def auto_grant_id(person: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", str(person or "").strip()) or "member"
+    return f"{AUTO_GRANT_PREFIX}{slug}"
+
+
+def _ops(grant: dict) -> set[str]:
+    return {str(item) for item in _as_list(grant.get("operations"))}
+
+
+def letter_ops_granted(policy: dict, person: str, member: str = "") -> bool:
+    have: set[str] = set()
+    for grant in policy.get("grants") or []:
+        if not grantee_ok(grant, person, member):
+            continue
+        have |= _ops(grant)
+    return set(LETTER_OPS) <= have
+
+
+def _format_auto_grant(person: str) -> str:
+    return (
+        f"  - id: {auto_grant_id(person)}\n"
+        f"    description: \"登记同事时自动授予的普通写信权限\"\n"
+        f"    grantees: [{person}]\n"
+        f"    operations: [ask, notify, reply]\n"
+    )
+
+
+def _grants_insert_at(text: str) -> tuple[int, bool]:
+    """Return the character index at which to insert a new grant item, and whether grants is currently []."""
+    empty = re.search(r"(?m)^grants:\s*\[\s*\]\s*$", text)
+    if empty:
+        return empty.start(), True
+    key = re.search(r"(?m)^grants:\s*$", text)
+    if not key:
+        return -1, False
+    # walk lines after 'grants:' until a new top-level key
+    after = text[key.end():]
+    offset = key.end()
+    last_in_section = offset
+    pos = 0
+    for line in after.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and not line.startswith((" ", "\t", "\n", "\r")):
+            # next top-level key
+            return offset + pos, False
+        if stripped:
+            last_in_section = offset + pos + len(line)
+        pos += len(line)
+    return last_in_section, False
+
+
+def _grant_block_span(text: str, grant_id: str) -> tuple[int, int] | None:
+    match = re.search(rf"(?m)^(\s*)- id:\s*{re.escape(grant_id)}\s*$", text)
+    if not match:
+        return None
+    start = match.start()
+    pos = match.end()
+    end = len(text)
+    for line in text[match.end():].splitlines(keepends=True):
+        if re.match(r"\s*- id:", line) or (
+            line.strip() and not line[:1].isspace() and not line.lstrip().startswith("#")
+        ):
+            end = pos
+            break
+        pos += len(line)
+    return start, end
+
+
+def _replace_yaml_list(block: str, key: str, values: list[str]) -> str:
+    line = f"{key}: [{', '.join(values)}]"
+    patched, n = re.subn(rf"(?m)^(\s*){re.escape(key)}:\s*\[[^\]]*\]", rf"\1{line}", block, count=1)
+    return patched if n else block
+
+
+def ensure_letter_grant(path, person: str) -> str:
+    """Idempotently grant ask/notify/reply to person. Returns added / already / updated.
+
+    Only inserts or lightly completes an auto-managed grant (id g-trust-<person>).
+    Does not rewrite the rest of policy.yaml, so comments and hand-edited grants stay.
+    """
+    from pathlib import Path
+    from xlt.yamlutil import loads
+
+    path = Path(path)
+    person = str(person or "").strip()
+    if not person:
+        return "already"
+    if not path.exists():
+        from xlt.store import POLICY_TEMPLATE
+
+        path.write_text(POLICY_TEMPLATE.format(person=person), encoding="utf-8")
+    text = path.read_text(encoding="utf-8")
+    policy = loads(text) or {}
+    if letter_ops_granted(policy, person, person):
+        return "already"
+
+    auto_id = auto_grant_id(person)
+    existing = next((g for g in (policy.get("grants") or []) if g.get("id") == auto_id), None)
+    if existing is not None:
+        span = _grant_block_span(text, auto_id)
+        if span:
+            start, end = span
+            block = text[start:end]
+            ops = [str(item) for item in _as_list(existing.get("operations"))]
+            for op in LETTER_OPS:
+                if op not in ops:
+                    ops.append(op)
+            grantees = [str(item) for item in _as_list(existing.get("grantees"))]
+            if person not in grantees:
+                grantees.append(person)
+            block = _replace_yaml_list(block, "operations", ops)
+            block = _replace_yaml_list(block, "grantees", grantees)
+            path.write_text(text[:start] + block + text[end:], encoding="utf-8")
+            return "updated"
+    return _append_auto_grant(path, text, person)
+
+
+def _append_auto_grant(path, text: str, person: str) -> str:
+    block = _format_auto_grant(person)
+    at, empty = _grants_insert_at(text)
+    if empty:
+        match = re.search(r"(?m)^grants:\s*\[\s*\]\s*$", text)
+        new = text[: match.start()] + "grants:\n" + block + text[match.end():]
+    elif at >= 0:
+        insert = block if text[:at].endswith("\n") else "\n" + block
+        new = text[:at] + insert + text[at:]
+    else:
+        if text and not text.endswith("\n"):
+            text += "\n"
+        new = text + "grants:\n" + block
+    if text.endswith("\n") and not new.endswith("\n"):
+        new += "\n"
+    path.write_text(new, encoding="utf-8")
+    return "added"
+
+
+def backfill_trusted_letter_grants(home) -> list[tuple[str, str]]:
+    """Ensure every trusted colleague (not myself) has letter grants. Returns (person, status) list."""
+    from xlt.store import load_config, load_directory
+
+    cfg = load_config(home)
+    me = cfg.get("me")
+    results = []
+    path = home.root / "policy.yaml"
+    seen = set()
+    for agent in load_directory(home):
+        if agent.get("name") == me:
+            continue
+        person = str(agent.get("person") or agent.get("name") or "").strip()
+        if not person or person in seen:
+            continue
+        seen.add(person)
+        results.append((person, ensure_letter_grant(path, person)))
+    return results

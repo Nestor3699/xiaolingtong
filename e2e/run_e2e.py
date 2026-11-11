@@ -182,6 +182,7 @@ def main() -> int:
         argv_notes.append("codex: " + " ".join(codex))
         ok("五种命令行按方案拼出来了（claude / pi / dsh / codex）")
 
+        # 有意覆盖 trust 自动授予的权限：只让 nes 提问，并加一条读文件授权，用来测沈总被拒。
         policy = f"""version: 1
 owner: haonian
 default: deny

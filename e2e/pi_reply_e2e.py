@@ -66,10 +66,6 @@ def main() -> int:
                 fail("init " + result.stderr)
         xlt(nes, "trust", "--name", "haonian-win", "--person", "haonian", "--os", "windows", "--port", "47420", "--crt", str(hao / "tls" / "haonian-win.crt"), "--primary")
         xlt(hao, "trust", "--name", "nes-mac", "--person", "nes", "--os", "macos", "--port", "47410", "--crt", str(nes / "tls" / "nes-mac.crt"), "--primary")
-        (hao / "policy.yaml").write_text(
-            "version: 1\nowner: haonian\ndefault: deny\nmode: normal\ngrants:\n  - id: g1\n    grantees: [nes]\n    operations: [ask, notify]\n",
-            encoding="utf-8",
-        )
         xlt(hao, "register", "--agent", "pi", "--window", "main", "--delivery", "extension")
         xlt(nes, "register", "--agent", "pi", "--window", "main", "--delivery", "extension")
         (hao / "routes.yaml").write_text("version: 1\ndefault: pi/main\non_window_lost: fallback_default\nbusy_timeout_s: 600\nrules: []\n", encoding="utf-8")

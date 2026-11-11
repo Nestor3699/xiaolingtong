@@ -136,7 +136,7 @@ $Xlt = "$env:USERPROFILE\xiaolingtong\.venv\Scripts\xlt.exe"
 
 ## 2. 生成本机证书，并把证书和指纹交给同事
 
-**目标：** 这台电脑有自己的证书；主人把「证书文件 + 指纹」成对发给同事；本机写好起步权限，别人才能给你写信。
+**目标：** 这台电脑有自己的证书；主人把「证书文件 + 指纹」成对发给同事。登记同事证书（第 3 步 `xlt trust`）时，会自动授予对方普通写信权限，不必再手改 `policy.yaml`。
 
 ### 2.1 运行 `xlt init`
 
@@ -163,12 +163,12 @@ $Xlt = "$env:USERPROFILE\xiaolingtong\.venv\Scripts\xlt.exe"
 机器名：runda-mac
 人名：runda
 私钥（不要发给任何人）：/Users/<用户>/.xlt/tls/runda-mac.key
-证书（可以发给 Nes）：/Users/<用户>/.xlt/tls/runda-mac.crt
+证书（可以发给同事）：/Users/<用户>/.xlt/tls/runda-mac.crt
 SHA-256 指纹：AA:BB:CC:…
-把指纹和证书文件交给 Nes 登记。私钥留在这台电脑。
+请把「证书文件 + 上面整行指纹」发到团队群或共享文件夹，让每位同事用 xlt trust 登记你。
+你也要用同样方式登记他们的证书和指纹（必须双向，缺一边就发不成信）。
+私钥留在这台电脑，不要发给任何人。
 ```
-
-程序提示里仍写「交给 Nes 登记」。**实际做法见 2.2：请主人发到团队群或共享文件夹，让每位同事都能登记你，不只是 Nes。**
 
 **怎么判断成功：** 同时出现「证书（可以发给…）」和「SHA-256 指纹：」两行；并且这两个文件存在（把 `<机器名>` 换成本机机器名）：
 
@@ -199,52 +199,19 @@ Windows 路径是 `%USERPROFILE%\.xlt\tls\<机器名>.crt` 和对应的 `.key`�
 
 你自己也不要在对话里打印私钥或密钥文件内容。把证书路径和指纹告诉主人即可。
 
-### 2.3 写起步权限清单（不写的话，同事给你发 `ask` / `notify` 会被拒绝）
+### 2.3 权限（一般不用手改）
 
-`xlt init` 生成的 `~/.xlt/policy.yaml` 默认是 `default: deny`、`grants: []`。这是故意的。通讯员在收下别人的提问或留言前，会按这份清单硬检查；**默认拒绝，没有授权就会回 `NO_GRANT`（「没有被授权做这件事」）**。对「你发出去的信」的回信不需要这条授权。
+第 3 步用 `xlt trust` 登记一位同事时，会自动授予对方普通写信权限（`ask` / `notify` / `reply`）。**读文件、列目录、搜索默认仍然拒绝**，不要把 `default` 改成 allow，也不要把 `~/.xlt`、`secrets`、`.ssh`、`.env` 写进任何 `allow_paths`。
 
-请把下面内容写入 `~/.xlt/policy.yaml`（Windows：`%USERPROFILE%\.xlt\policy.yaml`），把 `owner:` 换成主人的人名 id。这份起步授权只允许五人互相提问和留言，**不开放读文件**。不要把 `default` 改成 allow，不要把 `~/.xlt`、`secrets`、`.ssh`、`.env` 写进任何 `allow_paths`。
-
-```yaml
-# 只有本机主人能改。没写允许的，一律拒绝。
-version: 1
-owner: runda
-default: deny
-mode: normal
-away:
-  from: null
-  until: null
-grants:
-  - id: g-letters
-    description: "允许五位同事向我的 AI 提问或留言；不开放读文件"
-    grantees: [nes, leo, runda, haonian, mario]
-    operations: [ask, notify]
-limits:
-  rate_per_minute: 30
-  max_concurrent: 4
-audit:
-  retention_days: 90
-```
-
-然后检查：
+已有安装、升级代码之后：对每位已登记的同事再跑一次同样的 `xlt trust`（会补上授权，不重复添加）；或者一次跑：
 
 ```bash
-chmod 600 "$HOME/.xlt/policy.yaml"    # Windows 用 icacls 只给主人读写
-"$XLT" policy check
+"$XLT" policy grant-trusted
 ```
 
-Windows：
+若主人明确要求「只加证书、先不要让对方写信」，登记时加 `--no-grant`。之后要放开，再跑一次不带该开关的 `xlt trust`，或执行 `xlt policy grant-trusted`。
 
-```powershell
-icacls "$env:USERPROFILE\.xlt\policy.yaml" /inheritance:r /grant:r "$env:USERNAME:(R,W)"
-& $Xlt policy check
-```
-
-**怎么判断成功：** 输出类似 `权限清单可以读。模式 normal，授权 1 条，默认拒绝。`
-
-**失败时：** 若打印「权限清单有问题」，按提示改。不要把 `default` 改成 allow。
-
-以后若要让同事读某个项目目录，再增加带 `allow_paths` 和 `operations: [list, read, search]` 的授权；密钥目录仍然不要写进去。改完再跑 `xlt policy check`。
+以后若要让同事读某个项目目录，再在 `~/.xlt/policy.yaml` 里增加带 `allow_paths` 和 `operations: [list, read, search]` 的授权；密钥目录仍然不要写进去。改完跑 `"$XLT" policy check`。手改政策文件时，不要删掉 `g-trust-<人名>` 那几条，除非主人就是要收回写信权限。
 
 ---
 
@@ -294,9 +261,12 @@ icacls "$env:USERPROFILE\.xlt\policy.yaml" /inheritance:r /grant:r "$env:USERNAM
 已信任 nes-mac（nes）
 指纹：AA:BB:CC:…
 请和本人对一下指纹的前几位。名单文件已被重写，手写注释不会保留。
+已授予 nes 普通写信权限（ask / notify / reply）。读文件、列目录、搜索仍默认拒绝，需要时再改政策。
 ```
 
-**怎么判断成功：** 出现「已信任 …」；打印出的「指纹：」与对方在群里贴的全文一致。不一致就停下来告诉主人：证书文件可能拿错或被改过。不要启动互发。没有「取消信任」命令；同一 `--name` 再跑一次 `xlt trust` 会用新证书覆盖旧记录。
+（若对方本来就有授权，会改说「已有普通写信权限……未改政策文件」。）
+
+**怎么判断成功：** 出现「已信任 …」；打印出的「指纹：」与对方在群里贴的全文一致；并出现授予或「已有」普通写信权限的那一行。不一致就停下来告诉主人：证书文件可能拿错或被改过。不要启动互发。没有「取消信任」命令；同一 `--name` 再跑一次 `xlt trust` 会用新证书覆盖旧记录，并在缺少授权时补上。
 
 ### 3.2 用 `xlt peers` 查看名单
 
@@ -461,7 +431,7 @@ launchctl kickstart -k gui/$(id -u)/com.xiaolingtong.gateway
 |---|---|---|
 | `delivered` | 对方已收下（`message` 多为「对方已收下」；若是「对方已收过，已从待发箱移除」也算成功） | 成功。把消息 `id` 告诉主人即可 |
 | `queued` | 对方此刻离线或还没登记你，信已进你这边的待发箱 | 不必重发。对方上线且双方都 trust 之后会自动补发。用 `xlt outbox` 或 `xlt status` 查看 |
-| `rejected` | 被拒绝 | 把完整 JSON 交给主人转给 Nes。常见：`UNKNOWN_PERSON`（你还没 trust 对方）、`NO_GRANT`（对方权限清单没允许你的人名做 `notify`/`ask`）、通讯员没运行（会提示先 `xlt serve`） |
+| `rejected` | 被拒绝 | 把完整 JSON 交给主人转给 Nes。常见：`UNKNOWN_PERSON`（你还没 trust 对方）、`NO_GRANT`（对方还没 trust 你，或用了 `--no-grant`）、通讯员没运行（会提示先 `xlt serve`） |
 
 `xlt send` 在通讯员没运行时仍会把信先存到本机，JSON 里 `status` 为 `queued`，`message` 为「通讯员没在运行。信已保存在本机，执行 xlt serve 后会自动发出」。先把通讯员拉起来，不必改信件内容再发一次。
 
@@ -469,14 +439,13 @@ launchctl kickstart -k gui/$(id -u)/com.xiaolingtong.gateway
 
 ## 7. 以后要加入新成员时
 
-**新来的人**（和他电脑上的 AI）：从本文第 0 步做到第 6 步。`policy.yaml` 的 `grantees` 要包含新的人名 id 和原有五人。他把自己的 `.crt` 和指纹发到团队群，并收集每一位现有同事的 `.crt` 和指纹，逐个 `xlt trust`。
+**新来的人**（和他电脑上的 AI）：从本文第 0 步做到第 6 步。他把自己的 `.crt` 和指纹发到团队群，并收集每一位现有同事的 `.crt` 和指纹，逐个 `xlt trust`（会自动授予对方写信权限）。
 
 **每一位已经在用的人**（你若在现有成员的电脑上）：
 
-1. 向主人要到新人成对的 `.crt` 和指纹，按第 3 步执行 `xlt trust`（Windows 新人记得 `--os windows`），核对指纹。
-2. 把新人的人名 id 加进本机 `~/.xlt/policy.yaml` 里起步授权的 `grantees`，再跑 `"$XLT" policy check`。
-3. 保持本机通讯员运行，方便新人做第 6 步测试。
-4. 仍然不要收、不要转发任何 `.key`。
+1. 向主人要到新人成对的 `.crt` 和指纹，按第 3 步执行 `xlt trust`（Windows 新人记得 `--os windows`），核对指纹。这一步同时补上写信授权，不必再手改 `policy.yaml`。
+2. 保持本机通讯员运行，方便新人做第 6 步测试。
+3. 仍然不要收、不要转发任何 `.key`。
 
 ---
 
@@ -499,6 +468,7 @@ launchctl kickstart -k gui/$(id -u)/com.xiaolingtong.gateway
 | 标记已处理、不回信 | `"$XLT" done <消息id>` |
 | 看收件箱 / 待发箱 | `"$XLT" inbox`　`"$XLT" outbox` |
 | 检查权限清单 | `"$XLT" policy check` |
+| 给已登记同事补上写信权限 | `"$XLT" policy grant-trusted`（已有安装升级后用；新的 `xlt trust` 会自动授予） |
 | 注销窗口 | `"$XLT" unregister --window <窗口名>`（信箱文件还在） |
 | 试路由 | `"$XLT" route test --type ask --from nes` |
 
@@ -513,7 +483,7 @@ launchctl kickstart -k gui/$(id -u)/com.xiaolingtong.gateway
 | `xlt peers` 里同事一直「离线」，互相发现不了 | 双方 `xlt serve` 是否在跑；路由器是否开了「AP 隔离 / 设备隔离」；Windows 是否「专用网络」；防火墙是否放行了 **UDP 47801** 和 **TCP 47800**（仅专用、仅本子网）；macOS 是否点了「本地网络 / 传入连接」允许。办公室发现靠 UDP 广播，不是靠填 IP。若本机开着 Clash / Surge TUN 或 Tailscale，先看下一行 |
 | VPN（Clash TUN / 虚拟网卡）下发现不了 | 双方都运行 `"$XLT" doctor`（或 `xlt status` 里的「网络诊断」）。选中的地址必须是办公室网卡上的 `192.168.x` / `10.x`（例如 Wi-Fi `en0`），不能是 `198.18.x`（Clash/Surge Fake-IP）或 `100.x`（Tailscale）。Clash Verge 可以继续开着 TUN，但要保证局域网直出：规则里加上 `IP-CIDR,192.168.0.0/16,DIRECT`（或 `GEOIP,LAN,DIRECT` / 打开 bypass private / 绕过私有地址）；Windows 开 TUN 时把 **strict route / 严格路由** 关掉，否则本机发出的局域网包也会被收走。macOS 防火墙必须允许 **Python 传入连接**。修好规则并重启双方通讯员后再看 `xlt peers`。若广播仍过不去：双方用 `xlt trust … --lan-ip <对方办公室IP>` 登记对方的局域网地址（发现包会单播补发）；再不行，加上 `--tailscale-ip <对方 Tailscale IP>`，通讯员在局域网失败时会走 Tailscale |
 | 发信 `rejected`，`UNKNOWN_PERSON` | 你还没对对方做 `xlt trust`，或 `--to` 写错了人名 id |
-| 发信 `rejected`，`NO_GRANT` / 「没有被授权做这件事」 | 对方的 `policy.yaml` 还没授权你的人名 id 做 `ask` / `notify`（见第 2.3 步）。请对方补授权后再发，或等他改完后你这边待发箱不必重写 |
+| 发信 `rejected`，`NO_GRANT` / 「没有被授权做这件事」 | 对方还没对你做 `xlt trust`，或用了 `--no-grant`，或手改政策时删掉了授权。请对方再跑一次 `xlt trust`（同一证书即可补上），或执行 `xlt policy grant-trusted`。你这边待发箱不必重写 |
 | 指纹对不上 / 日志里出现指纹不符 | 证书文件和群里贴的指纹不是同一份，或登记时拿错了文件。停止互发，重新拿到成对的 `.crt` 和指纹，对同一 `--name` 再跑一次 `xlt trust`，核对打印出的指纹全文 |
 | 发信 `queued` | 对方关机、睡眠、通讯员没运行，或对方还没登记你。信在你这边的待发箱，条件满足后会自动补发，不用重发。用 `xlt outbox` 或 `xlt status` 查看 |
 | `xlt send` 说通讯员没在运行 | 先 `xlt serve` 或检查自启是否真的起来了 |

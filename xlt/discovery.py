@@ -91,7 +91,7 @@ class Discovery(threading.Thread):
             except OSError:
                 break
             if raw:
-                self._handle(raw, src)
+                self._handle_packet(raw, src)
             if time.time() >= next_beat:
                 self.announce("heartbeat", times=1)
                 next_beat = time.time() + interval + random.uniform(-jitter, jitter)
@@ -205,7 +205,7 @@ class Discovery(threading.Thread):
             return None
         return data
 
-    def _handle(self, raw: bytes, src):
+    def _handle_packet(self, raw: bytes, src):
         msg, why = self._check(raw)
         if msg is None:
             if why and why != "自己":

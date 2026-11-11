@@ -56,6 +56,7 @@ def main(argv=None) -> int:
     trust.add_argument("--port", type=int, default=47800)
     trust.add_argument("--tailscale-ip", default="")
     trust.add_argument("--primary", action="store_true")
+    trust.add_argument("--no-grant", action="store_true", help="只登记证书，不自动授予普通写信权限")
     trust.set_defaults(func=cmd_trust)
 
     run = sub.add_parser("serve", help="启动常驻通讯员")
@@ -144,6 +145,10 @@ def main(argv=None) -> int:
     policy = sub.add_parser("policy")
     policy_sub = policy.add_subparsers(dest="policy_cmd", required=True)
     policy_sub.add_parser("check").set_defaults(func=cmd_policy_check)
+    policy_sub.add_parser(
+        "grant-trusted",
+        help="给已登记但还没有写信权限的同事补上 ask/notify/reply（已有安装用来补授权）",
+    ).set_defaults(func=cmd_policy_grant_trusted)
 
     args = parser.parse_args(argv)
     try:
@@ -162,9 +167,11 @@ def cmd_init(home: Home, args) -> int:
     print(f"机器名：{args.me}")
     print(f"人名：{person}")
     print(f"私钥（不要发给任何人）：{home.tls / (args.me + '.key')}")
-    print(f"证书（可以发给 Nes）：{home.tls / (args.me + '.crt')}")
+    print(f"证书（可以发给同事）：{home.tls / (args.me + '.crt')}")
     print(f"SHA-256 指纹：{fp}")
-    print("把指纹和证书文件交给 Nes 登记。私钥留在这台电脑。")
+    print("请把「证书文件 + 上面整行指纹」发到团队群或共享文件夹，让每位同事用 xlt trust 登记你。")
+    print("你也要用同样方式登记他们的证书和指纹（必须双向，缺一边就发不成信）。")
+    print("私钥留在这台电脑，不要发给任何人。")
     return 0
 
 
@@ -187,6 +194,17 @@ def cmd_trust(home: Home, args) -> int:
     print(f"已信任 {args.name}（{person}）")
     print(f"指纹：{fp}")
     print("请和本人对一下指纹的前几位。名单文件已被重写，手写注释不会保留。")
+    if args.no_grant:
+        print("已按 --no-grant 跳过授权。未授权前，对方发来的提问和留言会被拒绝。")
+    else:
+        from xlt.policy import LETTER_OPS, ensure_letter_grant
+
+        status = ensure_letter_grant(home.root / "policy.yaml", person)
+        ops = " / ".join(LETTER_OPS)
+        if status == "already":
+            print(f"{person} 已有普通写信权限（{ops}），未改政策文件。")
+        else:
+            print(f"已授予 {person} 普通写信权限（{ops}）。读文件、列目录、搜索仍默认拒绝，需要时再改政策。")
     return 0
 
 
@@ -451,6 +469,22 @@ def cmd_route_lost(home: Home, args) -> int:
     routes["on_window_lost"] = args.policy
     save_routes(home, routes)
     print(f"窗口失效时：{args.policy}")
+    return 0
+
+
+def cmd_policy_grant_trusted(home: Home, args) -> int:
+    from xlt.policy import LETTER_OPS, backfill_trusted_letter_grants
+
+    results = backfill_trusted_letter_grants(home)
+    ops = " / ".join(LETTER_OPS)
+    added = [person for person, status in results if status != "already"]
+    if not results:
+        print("名单里还没有其他同事。先用 xlt trust 登记证书。")
+        return 0
+    if not added:
+        print(f"名单里的同事都已有普通写信权限（{ops}），未改政策文件。")
+        return 0
+    print(f"已为 { '、'.join(added) } 补上普通写信权限（{ops}）。读文件、列目录、搜索仍默认拒绝。")
     return 0
 
 

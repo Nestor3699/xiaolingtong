@@ -1,5 +1,5 @@
 # 成员名单样例。指纹还是空的，不要直接拿去当真名单。
-# 每人在自己电脑上 xlt init，把打印出来的指纹和 .crt 交给 Nes，再 xlt trust。
+# 每人在自己电脑上 xlt init，把打印出来的指纹和 .crt 发到团队群，双方都做 xlt trust。
 version: 1
 agents:
   - name: nes-mac
