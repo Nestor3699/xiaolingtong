@@ -547,6 +547,14 @@ tr.warn-row:focus { outline-color: var(--warning-fg); }
   font-size: 11px;
   line-height: 16px;
 }
+.live-stamp {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: var(--weight);
+  margin-left: 8px;
+  white-space: nowrap;
+}
 @media (max-width: 860px) {
   .app { display: block; }
   .sidebar {
@@ -581,11 +589,113 @@ def _nav_link(anchor: str, title: str, count: str | None = None, active: bool = 
     return f'<a href="#{_esc(anchor)}"{cls}><span>{_esc(title)}</span>{badge}</a>'
 
 
+def _tr(key: str, css: str = "") -> str:
+    cls = f" class='{css}'" if css else ""
+    return f"<tr{cls} tabindex='-1' data-row='{_esc(key)}'>"
+
+
+LIVE_JS = """(function () {
+  var INTERVAL = 5000;
+  var lastOk = Date.now();
+  var busy = false;
+  window.__xltLiveMarker = window.__xltLiveMarker || Date.now();
+
+  function selecting() {
+    if (document.hidden) return true;
+    var sel = window.getSelection();
+    return !!(sel && !sel.isCollapsed && String(sel));
+  }
+
+  function snapshot() {
+    var active = document.activeElement;
+    var row = active && active.closest ? active.closest("tbody tr") : null;
+    var side = document.querySelector(".sidebar");
+    return {
+      x: window.scrollX,
+      y: window.scrollY,
+      side: side ? side.scrollTop : 0,
+      key: row ? row.getAttribute("data-row") : null,
+      hash: location.hash
+    };
+  }
+
+  function restore(s) {
+    if (s.hash && location.hash !== s.hash) {
+      location.hash = s.hash;
+    }
+    if (s.key) {
+      var rows = document.querySelectorAll("tbody tr[data-row]");
+      for (var i = 0; i < rows.length; i++) {
+        if (rows[i].getAttribute("data-row") === s.key) {
+          if (rows[i].focus) rows[i].focus({preventScroll: true});
+          break;
+        }
+      }
+    }
+    var side = document.querySelector(".sidebar");
+    if (side) side.scrollTop = s.side;
+    window.scrollTo(s.x, s.y);
+  }
+
+  function markup(root) {
+    var clone = root.cloneNode(true);
+    var stamp = clone.querySelector("#live-stamp");
+    if (stamp) stamp.textContent = "";
+    return clone.innerHTML;
+  }
+
+  function paintStamp() {
+    var el = document.getElementById("live-stamp");
+    if (!el) return;
+    var sec = Math.max(0, Math.floor((Date.now() - lastOk) / 1000));
+    el.textContent = sec <= 0 ? "刚刚更新" : (sec + " 秒前更新");
+  }
+
+  function tick() {
+    if (busy || selecting()) return;
+    busy = true;
+    var url = location.pathname || "/";
+    fetch(url, {cache: "no-store", headers: {Accept: "text/html"}})
+      .then(function (res) {
+        if (!res.ok) throw new Error(String(res.status));
+        return res.text();
+      })
+      .then(function (text) {
+        if (selecting()) return;
+        var doc = new DOMParser().parseFromString(text, "text/html");
+        var next = doc.querySelector(".app");
+        var cur = document.querySelector(".app");
+        if (!next || !cur) return;
+        lastOk = Date.now();
+        if (markup(cur) === markup(next)) {
+          paintStamp();
+          return;
+        }
+        var s = snapshot();
+        cur.replaceWith(next);
+        if (doc.title) document.title = doc.title;
+        restore(s);
+        paintStamp();
+      })
+      .catch(function () {})
+      .then(function () { busy = false; });
+  }
+
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) tick();
+  });
+  setInterval(tick, INTERVAL);
+  setInterval(paintStamp, 1000);
+  paintStamp();
+})();
+"""
+
+
 def render(snap: dict) -> str:
     peer_rows = []
     for peer in snap["peers"]:
         peer_rows.append(
-            "<tr tabindex='-1'>"
+            f"{_tr('peer:' + str(peer.get('name') or peer.get('owner')))}"
             f"<td>{_esc(peer['owner'])}<div class='tiny'>{_esc(peer['person'])} · {_esc(peer['name'])}</div></td>"
             f"<td>{_badge(peer['state'])}</td>"
             f"<td>{_esc(peer['ip'] or '—')}</td>"
@@ -596,17 +706,17 @@ def render(snap: dict) -> str:
         )
         if peer.get("cert_warning"):
             peer_rows.append(
-                f"<tr class='warn-row' tabindex='-1'><td colspan='6' class='warn'>{_esc(peer['cert_warning'])}</td></tr>"
+                f"{_tr('peer-warn:' + str(peer.get('name') or peer.get('owner')), 'warn-row')}<td colspan='6' class='warn'>{_esc(peer['cert_warning'])}</td></tr>"
             )
     if not peer_rows:
         peer_rows.append(
-            "<tr tabindex='-1'><td colspan='6' class='muted'>成员名单里还没有其他同事。开着网关等广播即可，也可以用 xlt trust 把他们的证书加进来。</td></tr>"
+            f"{_tr('empty-peers')}<td colspan='6' class='muted'>成员名单里还没有其他同事。开着网关等广播即可，也可以用 xlt trust 把他们的证书加进来。</td></tr>"
         )
 
     pend_rows = []
     for item in snap["pending"]:
         pend_rows.append(
-            "<tr tabindex='-1'>"
+            f"{_tr('pend:' + str(item.get('id') or ''))}"
             f"<td class='mono'>{_esc(item.get('id'))}</td>"
             f"<td>{_esc(item.get('to_member') or item.get('to'))}</td>"
             f"<td>{_esc(item.get('type'))}</td>"
@@ -617,13 +727,13 @@ def render(snap: dict) -> str:
             "</tr>"
         )
     if not pend_rows:
-        pend_rows.append("<tr tabindex='-1'><td colspan='7' class='muted'>待发箱是空的。</td></tr>")
+        pend_rows.append(f"{_tr('empty-pending')}<td colspan='7' class='muted'>待发箱是空的。</td></tr>")
 
     in_rows = []
     for item in snap["inbox"]:
         state = (item.get("state") or {}).get("status")
         in_rows.append(
-            "<tr tabindex='-1'>"
+            f"{_tr('inbox:' + str(item.get('id') or ''))}"
             f"<td class='mono'>{_esc(item.get('id'))}</td>"
             f"<td>{_esc(item.get('from_person'))}</td>"
             f"<td>{_esc(item.get('type'))}</td>"
@@ -634,12 +744,12 @@ def render(snap: dict) -> str:
             "</tr>"
         )
     if not in_rows:
-        in_rows.append("<tr tabindex='-1'><td colspan='7' class='muted'>还没有收到信。</td></tr>")
+        in_rows.append(f"{_tr('empty-inbox')}<td colspan='7' class='muted'>还没有收到信。</td></tr>")
 
     win_rows = []
     for window in snap["windows"]:
         win_rows.append(
-            "<tr tabindex='-1'>"
+            f"{_tr('win:' + str(window.get('ref') or ''))}"
             f"<td>{_esc(window['ref'])}</td>"
             f"<td>{_esc(window['delivery'])}</td>"
             f"<td>{_esc(window['liveness'])}</td>"
@@ -650,13 +760,13 @@ def render(snap: dict) -> str:
         )
     if not win_rows:
         win_rows.append(
-            "<tr tabindex='-1'><td colspan='6' class='muted'>还没有登记收信窗口。xlt register 之后，信才知道交给谁。</td></tr>"
+            f"{_tr('empty-windows')}<td colspan='6' class='muted'>还没有登记收信窗口。xlt register 之后，信才知道交给谁。</td></tr>"
         )
 
     rej_rows = []
     for item in reversed(snap["rejects"]):
         rej_rows.append(
-            "<tr tabindex='-1'>"
+            f"{_tr('rej:' + '|'.join(str(item.get(k) or '') for k in ('ts', 'caller', 'from', 'action', 'type')))}"
             f"<td class='tiny'>{_esc(item.get('ts'))}</td>"
             f"<td>{_esc(item.get('caller') or item.get('from'))}</td>"
             f"<td>{_esc(item.get('action') or item.get('type'))}</td>"
@@ -664,7 +774,7 @@ def render(snap: dict) -> str:
             "</tr>"
         )
     if not rej_rows:
-        rej_rows.append("<tr tabindex='-1'><td colspan='4' class='muted'>没有被拒记录。</td></tr>")
+        rej_rows.append(f"{_tr('empty-rejects')}<td colspan='4' class='muted'>没有被拒记录。</td></tr>")
 
     online = sum(1 for p in snap["peers"] if p["state"] == "online")
     owner = snap.get("owner") or snap.get("me")
@@ -673,7 +783,6 @@ def render(snap: dict) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="3">
 <title>小灵通通讯员 · {_esc(owner)}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -710,7 +819,7 @@ def render(snap: dict) -> str:
     <header class="page-head">
       <div class="page-title">
         <h1>小灵通通讯员</h1>
-        <p class="sub">{_esc(snap.get('owner'))} 的这台电脑（{_esc(snap.get('me'))}）· 只显示信封，不显示正文</p>
+        <p class="sub">{_esc(snap.get('owner'))} 的这台电脑（{_esc(snap.get('me'))}）· 只显示信封，不显示正文 <span id="live-stamp" class="live-stamp"></span></p>
       </div>
       <div class="stats">
         <div class="stat"><b>{_esc(snap.get('person'))}</b><span>人名</span></div>
@@ -777,6 +886,9 @@ def render(snap: dict) -> str:
     </div>
   </main>
 </div>
+<script>
+{LIVE_JS}
+</script>
 </body>
 </html>
 """
