@@ -61,6 +61,11 @@ def request(
     expect_fp: str,
     trust_pem: str,
     timeout: float,
+    content_type: str = "application/json",
+    body_path: Path | None = None,
+    body_offset: int = 0,
+    body_length: int | None = None,
+    extra_headers: dict | None = None,
 ) -> tuple[int, bytes]:
     raw = socket.create_connection((ip, port), timeout=timeout)
     ssock = context(cert, key, server=False, trust=trust_pem).wrap_socket(raw, server_hostname="xlt.local")
@@ -68,16 +73,37 @@ def request(
         got = peer_fingerprint(ssock)
         if got.upper() != (expect_fp or "").upper():
             raise FingerprintMismatch(got)
-        payload = body or b""
+        if body_path is not None:
+            length = int(body_length if body_length is not None else Path(body_path).stat().st_size - body_offset)
+        else:
+            payload = body or b""
+            length = len(payload)
+        extra = ""
+        for key_h, value in (extra_headers or {}).items():
+            extra += f"{key_h}: {value}\r\n"
         head = (
             f"{method} {path} HTTP/1.1\r\n"
             f"Host: {ip}\r\n"
-            "Content-Type: application/json\r\n"
-            f"Content-Length: {len(payload)}\r\n"
+            f"Content-Type: {content_type}\r\n"
+            f"Content-Length: {length}\r\n"
+            f"{extra}"
             "Connection: close\r\n"
             "\r\n"
         ).encode("ascii")
-        ssock.sendall(head + payload)
+        ssock.sendall(head)
+        if body_path is not None:
+            with Path(body_path).open("rb") as fh:
+                fh.seek(int(body_offset or 0))
+                left = length
+                while left > 0:
+                    piece = fh.read(min(65536, left))
+                    if not piece:
+                        break
+                    ssock.sendall(piece)
+                    left -= len(piece)
+        else:
+            if payload:
+                ssock.sendall(payload)
         chunks = []
         while True:
             piece = ssock.recv(65536)

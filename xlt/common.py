@@ -55,6 +55,11 @@ def wire_view(env: dict) -> dict:
         view[key] = env.get(key)
     if view["tags"] is None:
         view["tags"] = []
+    # 只有带附件的新信封才把附件元数据纳入签名，纯文本信仍和旧版兼容
+    if env.get("attachments"):
+        from xlt.attach import public_attachments
+
+        view["attachments"] = public_attachments(env.get("attachments"))
     return view
 
 
@@ -87,6 +92,11 @@ def envelope_summary(env: dict) -> dict:
             "copy_fallback": state.get("copy_fallback"),
             "last_error": state.get("last_error"),
         }
+    if env.get("attachments"):
+        from xlt.attach import progress_text, public_attachments
+
+        out["attachments"] = public_attachments(env.get("attachments"))
+        out["attach_progress"] = progress_text(env.get("attachments"))
     return out
 
 

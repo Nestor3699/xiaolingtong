@@ -44,13 +44,17 @@ xlt trust --name haonian-win --person haonian --owner 浩年 --os windows --crt 
 ```bash
 xlt send --to haonian --type ask --subject "退款流程" --file question.md
 xlt send --to haonian --type notify --text "周五评审改到三点"
+xlt send --to haonian --type notify --subject "截图" --text "请看附件" --attach ./shot.png
 xlt reply msg-... --text "超过 30 天要人工审核"
+xlt reply msg-... --text "表格在附件里" --attach ./table.csv
 xlt status
 xlt inbox
 xlt peers
 ```
 
 对方在线而且权限允许：输出里是 `delivered`（对方已收下）。对方不在：`queued`，信在你的待发箱，上线后自动补发，不用重发。对方没给你权限：`rejected`。
+
+带文件用 `--attach`（可重复，任意类型）。接收方保存在 `~/.xlt/inbox/<消息id>/attachments/`，信纸末尾会列出本机路径；只阅读，不要执行。传送进度看 `xlt outbox` / `xlt status`，中断后会续传。密钥、`.env`、私钥一类文件发不出去。
 
 AI 发信时读 `skills/xlt-send/SKILL.md`。Claude 的项目说明在 `CLAUDE.md`，Codex 的在 `AGENTS.md`，里面有一句同名登记（再登记一次会接管还没送达的信）。
 

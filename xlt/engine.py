@@ -23,6 +23,18 @@ from xlt.common import (
     write_json,
 )
 from xlt.crypto import fingerprint_bytes, load_key, sign_envelope, verify_envelope
+from xlt.attach import (
+    attachment_dir,
+    chunk_size,
+    describe_attachments,
+    file_egress_blocked,
+    hash_and_size,
+    prepare_attachments,
+    public_attachments,
+    unique_path,
+    verify_file_hash,
+    chmod_private,
+)
 from xlt.mtls import FingerprintMismatch, request, trust_pems
 from xlt.policy import egress_blocked, evaluate
 from xlt.store import (
@@ -57,6 +69,8 @@ class Engine:
         self.rates: dict[str, list[float]] = {}
         self.inflight: set[str] = set()
         self.flight = threading.Lock()
+        self.attach_locks: dict[str, threading.Lock] = {}
+        self.attach_locks_mu = threading.Lock()
         self.seen: set[str] = set()
         self.procs: dict[str, subprocess.Popen] = {}
         self.executor = None
@@ -228,9 +242,14 @@ class Engine:
             return 400, _err("BAD_ENVELOPE", "信纸和信封上的大小或哈希不一致", req_id), None
         if len(raw) > LETTER_MAX:
             return 413, _err("TOO_LARGE", "信超过 64KB", req_id), None
-        if self._already(env["id"]):
+        att_err = _validate_incoming_attachments(env.get("attachments"))
+        if att_err:
+            return 400, _err("BAD_ENVELOPE", att_err, req_id), None
+        existing = self._find_env(env["id"])
+        if existing is not None:
+            self.mark_seen(env["id"])
             self.log_env("重复投递，已去重", env)
-            return 200, {"id": env["id"], "status": "duplicate"}, None
+            return 200, _resume_payload(existing), None
         if _expired(env):
             return 410, _err("MESSAGE_EXPIRED", "这封信已经过了保留期", req_id), None
         sent = self._sent_match(env, member) if env.get("type") == "reply" else None
@@ -258,6 +277,18 @@ class Engine:
         }
         stored = dict(env)
         stored["state"] = state
+        waiting = False
+        if env.get("attachments"):
+            recv = _incoming_attachment_state(self.home, env["id"], env.get("attachments"))
+            stored["attachments"] = recv
+            if _finalize_empty_attachments(recv):
+                stored["attachments_listed"] = False
+                # 0 字节附件当场收齐，下面再决定要不要排队
+                waiting = not _attachments_done(stored)
+            else:
+                waiting = True
+            if waiting:
+                stored["state"]["status"] = "receiving"
         letter_path = folder / f"{env['id']}.letter.md"
         env_path = folder / f"{env['id']}.env.json"
         atomic_text(letter_path, letter)
@@ -276,8 +307,18 @@ class Engine:
             subject=env.get("subject"),
         )
         self.log_env(f"已收下 → {state['routed_to'] or '_hold'}（{why}）", env)
-        job = (window, env_path) if window else None
-        return 202, {"id": env["id"], "status": "accepted"}, job
+        if stored.get("attachments") and not waiting:
+            self._finish_attachments(env_path, stored)
+        job = (window, env_path) if window and not waiting else None
+        payload = {"id": env["id"], "status": "accepted"}
+        if stored.get("attachments"):
+            payload["attachments"] = [
+                {"id": item["id"], "received": int(item.get("received") or 0)}
+                for item in stored["attachments"]
+            ]
+            if waiting:
+                payload["status"] = "receiving"
+        return 202, payload, job
 
     def _already(self, msg_id: str) -> bool:
         if msg_id in self.seen:
@@ -542,6 +583,7 @@ class Engine:
         origin_window: str = "",
         in_reply_to: str | None = None,
         to_member: str | None = None,
+        attachments: list | None = None,
     ) -> dict:
         kind = kind or "ask"
         if kind not in ("ask", "notify", "reply"):
@@ -549,6 +591,17 @@ class Engine:
         blocked = egress_blocked(letter or "")
         if blocked:
             return {"status": "rejected", "reason": "EGRESS", "message": blocked}
+        prepared = []
+        if attachments:
+            paths = []
+            for item in attachments:
+                if isinstance(item, dict) and item.get("source"):
+                    paths.append(item["source"])
+                else:
+                    paths.append(str(item))
+            prepared, err = prepare_attachments(paths)
+            if err:
+                return {"status": "rejected", "reason": "EGRESS", "message": err}
         member = member_by_name(self.home, to_member) if to_member else None
         if member is None:
             member = resolve_person(self.home, target)
@@ -580,6 +633,8 @@ class Engine:
                 "letter_bytes": len(raw),
                 "letter_sha256": fingerprint_bytes(raw),
             }
+            if prepared:
+                env["attachments"] = public_attachments(prepared)
             signed = sign_envelope(self.key, env)
             stored = dict(signed)
             stored["origin_window"] = origin_window or ""
@@ -587,6 +642,8 @@ class Engine:
             stored["attempts"] = 0
             stored["last_error"] = None
             stored["state"] = {"status": "pending", "updated": now_iso()}
+            if prepared:
+                stored["attachments"] = prepared
             folder = self.home.pending / member["name"]
             folder.mkdir(parents=True, exist_ok=True)
             atomic_text(folder / f"{msg_id}.letter.md", letter or "")
@@ -610,7 +667,7 @@ class Engine:
         result["pending_count"] = len(_active_pending(self.home))
         return result
 
-    def local_reply(self, msg_id: str, text: str, status: str = "replied", origin: str = "") -> dict:
+    def local_reply(self, msg_id: str, text: str, status: str = "replied", origin: str = "", attachments: list | None = None) -> dict:
         found = self._find_env(msg_id)
         if found is None:
             return {"status": "rejected", "reason": "NOT_FOUND", "message": "这封信不在本机信箱里", "id": msg_id}
@@ -630,6 +687,7 @@ class Engine:
             origin_window=origin,
             in_reply_to=msg_id,
             to_member=target_member,
+            attachments=attachments,
         )
         new_status = "declined" if status == "declined" else "replied"
         if result.get("status") != "rejected":
@@ -696,9 +754,21 @@ class Engine:
                 return _queued(env, "对方离线，已排队，上线后自动补发")
             parsed = _json_body(body)
             if code in (202, 200):
+                if env.get("attachments"):
+                    _merge_resume(env, parsed.get("attachments") or [])
+                    write_json(env_path, env)
+                    sent = self._send_attachments(env_path, env, member, ip, port, trust)
+                    if sent.get("status") != "delivered":
+                        return sent
+                    try:
+                        env = json.loads(env_path.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        env = env
                 self._delete_pending(env_path, env)
                 self.event("delivered", env, http=code, source=source)
                 message = "对方已收下" if code == 202 else "对方已收过，已从待发箱移除"
+                if env.get("attachments"):
+                    message += "，附件已传完"
                 self.log_env(message, env)
                 return {
                     "id": env["id"],
@@ -706,6 +776,7 @@ class Engine:
                     "message": message,
                     "to": env.get("to_member"),
                     "expires": _expires(env),
+                    "attach_progress": __import__("xlt.attach", fromlist=["progress_text"]).progress_text(env.get("attachments")),
                 }
             err = (parsed.get("error") or {}) if isinstance(parsed, dict) else {}
             reason = err.get("code") or f"HTTP_{code}"
@@ -803,7 +874,7 @@ class Engine:
         op = data.get("op")
         msg_id = data.get("msg_id")
         if op == "xlt_reply":
-            self.local_reply(msg_id, data.get("text") or "", data.get("status") or "replied")
+            self.local_reply(msg_id, data.get("text") or "", data.get("status") or "replied", attachments=data.get("attachments") or [])
         elif op == "xlt_done":
             self.local_done(msg_id)
 
@@ -827,7 +898,12 @@ class Engine:
                 continue
             op = data.get("op")
             if op == "reply":
-                self.local_reply(data.get("msg_id") or "", data.get("text") or data.get("letter") or "", data.get("status") or "replied")
+                self.local_reply(
+                    data.get("msg_id") or "",
+                    data.get("text") or data.get("letter") or "",
+                    data.get("status") or "replied",
+                    attachments=data.get("attachments") or [],
+                )
             else:
                 self.local_send(
                     data.get("to") or "",
@@ -836,6 +912,7 @@ class Engine:
                     data.get("letter") or "",
                     data.get("tags") or [],
                     data.get("origin_window") or "",
+                    attachments=data.get("attachments") or [],
                 )
             path.unlink(missing_ok=True)
 
@@ -920,6 +997,242 @@ class Engine:
                     changed = True
         if changed:
             save_cache(self.home, cache)
+
+    def _att_lock(self, msg_id: str) -> threading.Lock:
+        with self.attach_locks_mu:
+            return self.attach_locks.setdefault(msg_id, threading.Lock())
+
+    def _send_attachments(self, env_path: Path, env: dict, member: dict, ip: str, port: int, trust: str) -> dict:
+        pause = float(os.environ.get("XLT_ATTACH_SLEEP", "0") or 0)
+        for att in list(env.get("attachments") or []):
+            source = Path(att.get("source") or "")
+            reason = file_egress_blocked(source) if source else "附件源文件不见了"
+            if reason:
+                self._move(env_path, self.home.pending / "failed")
+                self.event("failed", env, reason="EGRESS")
+                return {"id": env["id"], "status": "rejected", "reason": "EGRESS", "message": reason, "to": env.get("to_member")}
+            try:
+                sha, size = hash_and_size(source)
+            except OSError as exc:
+                self._move(env_path, self.home.pending / "failed")
+                return {"id": env["id"], "status": "rejected", "reason": "EGRESS", "message": f"读不了附件 {source.name}：{exc}", "to": env.get("to_member")}
+            if sha != att.get("sha256") or size != int(att.get("size") or 0):
+                self._move(env_path, self.home.pending / "failed")
+                return {
+                    "id": env["id"],
+                    "status": "rejected",
+                    "reason": "FILE_CHANGED",
+                    "message": f"附件 {source.name} 在排队期间被改过，已取消发送",
+                    "to": env.get("to_member"),
+                }
+            sent = int(att.get("sent") or 0)
+            try:
+                code, body = request(
+                    ip, port, "GET",
+                    f"/xlt/v1/attachments?msg_id={env['id']}&att_id={att['id']}",
+                    b"", self.cert, self.key_path, member.get("cert_sha256"), trust, 8,
+                )
+                if code == 200:
+                    got = _json_body(body)
+                    sent = max(sent, int(got.get("received") or 0))
+                elif code == 404:
+                    self._move(env_path, self.home.pending / "failed")
+                    return {
+                        "id": env["id"],
+                        "status": "rejected",
+                        "reason": "NO_ATTACH",
+                        "message": "对方这一版还不支持附件，请让对方升级小灵通",
+                        "to": env.get("to_member"),
+                    }
+            except FingerprintMismatch:
+                self.event("blocked_fingerprint", env, ip=ip)
+                return _queued(env, "指纹不符")
+            except OSError as exc:
+                self._bump(env_path, env, f"附件进度查询失败 {exc.__class__.__name__}")
+                return _queued(env, "对方离线，附件会在上线后接着传")
+            att["sent"] = sent
+            write_json(env_path, env)
+            while sent < size:
+                length = min(chunk_size(), size - sent)
+                try:
+                    code, body = request(
+                        ip, port, "POST",
+                        f"/xlt/v1/attachments?msg_id={env['id']}&att_id={att['id']}&offset={sent}&length={length}",
+                        b"",
+                        self.cert, self.key_path, member.get("cert_sha256"), trust, 120,
+                        content_type="application/octet-stream",
+                        body_path=source,
+                        body_offset=sent,
+                        body_length=length,
+                        extra_headers={
+                            "X-Xlt-Msg-Id": env["id"],
+                            "X-Xlt-Att-Id": att["id"],
+                            "X-Xlt-Offset": str(sent),
+                            "X-Xlt-Length": str(length),
+                        },
+                    )
+                except FingerprintMismatch:
+                    self.event("blocked_fingerprint", env, ip=ip)
+                    return _queued(env, "指纹不符")
+                except OSError as exc:
+                    self._bump(env_path, env, f"附件中断 {exc.__class__.__name__}")
+                    return _queued(env, "传输中断，已记下进度，上线后自动续传")
+                parsed = _json_body(body)
+                if code == 409:
+                    sent = int(parsed.get("received") or sent)
+                    att["sent"] = sent
+                    write_json(env_path, env)
+                    continue
+                if code == 404:
+                    self._move(env_path, self.home.pending / "failed")
+                    return {
+                        "id": env["id"],
+                        "status": "rejected",
+                        "reason": "NO_ATTACH",
+                        "message": "对方这一版还不支持附件，请让对方升级小灵通",
+                        "to": env.get("to_member"),
+                    }
+                if code not in (200, 202):
+                    err = (parsed.get("error") or {}) if isinstance(parsed, dict) else {}
+                    reason = err.get("code") or f"HTTP_{code}"
+                    message = err.get("message") or "对方拒绝了附件"
+                    if code in NO_RETRY:
+                        self._move(env_path, self.home.pending / "failed")
+                        self.event("failed", env, http=code, reason=reason)
+                        return {"id": env["id"], "status": "rejected", "reason": reason, "message": message, "to": env.get("to_member")}
+                    self._bump(env_path, env, message)
+                    return _queued(env, message)
+                sent = int(parsed.get("received") or (sent + length))
+                att["sent"] = sent
+                write_json(env_path, env)
+                if pause > 0:
+                    time.sleep(pause)
+            att["sent"] = size
+            write_json(env_path, env)
+        return {"id": env["id"], "status": "delivered"}
+
+    def on_attach_status(self, member: dict, msg_id: str, att_id: str, req_id: str) -> tuple[int, dict]:
+        with self.home.lock():
+            found = self._find_env(msg_id)
+            if found is None:
+                return 404, _err("NOT_FOUND", "没有这封信的附件", req_id)
+            env = json.loads(found.read_text(encoding="utf-8"))
+            if env.get("from") != member.get("name"):
+                return 401, _err("IDENTITY_MISMATCH", "这封信不是你发的", req_id)
+            att = _find_att(env, att_id)
+            if att is None:
+                return 404, _err("NOT_FOUND", "没有这个附件", req_id)
+            received = int(att.get("received") or 0)
+            size = int(att.get("size") or 0)
+            return 200, {"id": att_id, "received": received, "size": size, "complete": received >= size and size >= 0}
+
+    def on_attach_chunk(self, member: dict, msg_id: str, att_id: str, offset: int, length: int, reader, req_id: str) -> tuple[int, dict]:
+        if length < 0 or length > chunk_size() * 2:
+            return 400, _err("BAD_ENVELOPE", "这一块附件太大或长度无效", req_id)
+        if offset < 0:
+            return 400, _err("BAD_ENVELOPE", "偏移无效", req_id)
+        with self._att_lock(msg_id):
+            with self.home.lock():
+                found = self._find_env(msg_id)
+                if found is None:
+                    return 404, _err("NOT_FOUND", "没有这封信的附件", req_id)
+                env = json.loads(found.read_text(encoding="utf-8"))
+                if env.get("from") != member.get("name"):
+                    return 401, _err("IDENTITY_MISMATCH", "这封信不是你发的", req_id)
+                att = _find_att(env, att_id)
+                if att is None:
+                    return 404, _err("NOT_FOUND", "没有这个附件", req_id)
+                size = int(att.get("size") or 0)
+                received = int(att.get("received") or 0)
+                dest = Path(att.get("path") or "")
+                if not dest:
+                    return 400, _err("BAD_ENVELOPE", "附件路径无效", req_id)
+                if offset != received:
+                    err = _err("OFFSET", "请从已收下的偏移接着传", req_id)
+                    err["received"] = received
+                    err["id"] = att_id
+                    return 409, err
+                if received >= size:
+                    return 200, {"id": att_id, "received": received, "complete": True}
+                if offset + length > size:
+                    return 400, _err("TOO_LARGE", "这一块超出了文件大小", req_id)
+                part = Path(str(dest) + ".part")
+                part.parent.mkdir(parents=True, exist_ok=True)
+            wrote = 0
+            try:
+                with part.open("r+b" if part.exists() else "wb") as fh:
+                    if part.exists():
+                        fh.seek(0, 2)
+                        if fh.tell() != offset:
+                            fh.seek(offset)
+                    fh.seek(offset)
+                    left = length
+                    while left > 0:
+                        piece = reader.read(min(65536, left))
+                        if not piece:
+                            break
+                        fh.write(piece)
+                        left -= len(piece)
+                        wrote += len(piece)
+            except OSError as exc:
+                return 500, _err("BUSY", f"写附件失败：{exc}", req_id)
+            if wrote != length:
+                return 400, _err("BAD_ENVELOPE", "这一块没传完", req_id)
+            chmod_private(part)
+            finish_job = None
+            with self.home.lock():
+                env = json.loads(found.read_text(encoding="utf-8"))
+                att = _find_att(env, att_id)
+                if att is None:
+                    return 404, _err("NOT_FOUND", "没有这个附件", req_id)
+                att["received"] = offset + wrote
+                complete = att["received"] >= int(att.get("size") or 0)
+                if complete:
+                    if not verify_file_hash(part, att.get("sha256") or ""):
+                        try:
+                            part.unlink()
+                        except OSError:
+                            pass
+                        att["received"] = 0
+                        write_json(found, env)
+                        err = _err("HASH_MISMATCH", f"附件 {att.get('name')} 校验失败，请重传", req_id)
+                        err["received"] = 0
+                        return 409, err
+                    dest = Path(att["path"])
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    part.replace(dest)
+                    chmod_private(dest)
+                    att["complete"] = True
+                    att["path"] = str(dest)
+                write_json(found, env)
+                if complete and _attachments_done(env):
+                    finish_job = self._finish_attachments(found, env)
+            if finish_job:
+                self._submit(finish_job)
+            return 200, {"id": att_id, "received": offset + wrote, "complete": complete}
+
+    def _finish_attachments(self, env_path: Path, env: dict):
+        if env.get("attachments_listed"):
+            window = find_window(self.home, env_path.parent.name)
+            return (window, env_path) if window and env_path.parent.name != "_hold" else None
+        dest_dir = attachment_dir(self.home, env["id"])
+        letter_path = env_path.with_name(f"{env['id']}.letter.md")
+        extra = describe_attachments(env.get("attachments") or [], dest_dir)
+        if extra and letter_path.exists():
+            with letter_path.open("a", encoding="utf-8") as fh:
+                fh.write(extra)
+        env["attachments_listed"] = True
+        state = env.setdefault("state", {})
+        state["status"] = "queued"
+        state["updated"] = now_iso()
+        hist = state.setdefault("history", [])
+        hist.append(["queued", now_iso()])
+        write_json(env_path, env)
+        self.log_env("附件收齐，交给窗口", env)
+        if env_path.parent.name == "_hold":
+            return None
+        window = find_window(self.home, env_path.parent.name)
+        return (window, env_path) if window else None
 
     def _find_env(self, msg_id: str) -> Path | None:
         if not msg_id:
@@ -1053,6 +1366,114 @@ def _public(env: dict) -> dict:
     out = wire_view(env)
     out["sig"] = env.get("sig")
     return out
+
+
+def _validate_incoming_attachments(items) -> str | None:
+    if not items:
+        return None
+    if not isinstance(items, list) or len(items) > 64:
+        return "附件列表无效（最多 64 个）"
+    seen = set()
+    for item in items:
+        if not isinstance(item, dict):
+            return "附件元数据格式不对"
+        for key in ("id", "name", "size", "sha256"):
+            if item.get(key) in ("", None):
+                return f"附件缺少 {key}"
+        try:
+            size = int(item.get("size"))
+        except (TypeError, ValueError):
+            return "附件大小无效"
+        if size < 0:
+            return "附件大小无效"
+        if item["id"] in seen:
+            return "附件 id 重复"
+        seen.add(item["id"])
+    return None
+
+
+def _incoming_attachment_state(home, msg_id: str, items) -> list[dict]:
+    folder = attachment_dir(home, msg_id)
+    out = []
+    for item in public_attachments(items):
+        dest = unique_path(folder, item["name"])
+        out.append(
+            {
+                "id": item["id"],
+                "name": dest.name,
+                "size": int(item["size"] or 0),
+                "sha256": item["sha256"],
+                "received": 0,
+                "path": str(dest),
+            }
+        )
+    return out
+
+
+def _resume_payload(path: Path) -> dict:
+    try:
+        env = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"id": path.stem.replace(".env", ""), "status": "duplicate"}
+    payload = {"id": env.get("id"), "status": "duplicate"}
+    atts = env.get("attachments") or []
+    if atts:
+        payload["attachments"] = [
+            {"id": item.get("id"), "received": int(item.get("received") or 0)} for item in atts
+        ]
+        if not _attachments_done(env):
+            payload["status"] = "receiving"
+    return payload
+
+
+def _merge_resume(env: dict, offsets: list) -> None:
+    by_id = {item.get("id"): item for item in (offsets or []) if isinstance(item, dict)}
+    for att in env.get("attachments") or []:
+        got = by_id.get(att.get("id"))
+        if not got:
+            continue
+        try:
+            received = int(got.get("received") or 0)
+        except (TypeError, ValueError):
+            continue
+        att["sent"] = max(int(att.get("sent") or 0), received)
+
+
+def _find_att(env: dict, att_id: str):
+    for item in env.get("attachments") or []:
+        if item.get("id") == att_id:
+            return item
+    return None
+
+
+def _finalize_empty_attachments(items: list[dict]) -> bool:
+    """把 0 字节附件直接落成空文件并标完。"""
+    any_empty = False
+    for item in items:
+        if int(item.get("size") or 0) != 0:
+            continue
+        dest = Path(item["path"])
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"")
+        from xlt.attach import chmod_private
+
+        chmod_private(dest)
+        item["received"] = 0
+        item["complete"] = True
+        any_empty = True
+    return any_empty
+
+
+def _attachments_done(env: dict) -> bool:
+    items = env.get("attachments") or []
+    if not items:
+        return True
+    for item in items:
+        size = int(item.get("size") or 0)
+        got = int(item.get("received") or 0)
+        if got < size or not item.get("complete"):
+            return False
+    return True
 
 
 def _active_pending(home: Home) -> list[Path]:

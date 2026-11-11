@@ -26,6 +26,7 @@ LABELS = {
     "egress_blocked": "出口拦截",
     "delivering": "正在交给 AI",
     "accepted": "已收下",
+    "receiving": "正在收附件",
 }
 
 

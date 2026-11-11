@@ -12,7 +12,7 @@ import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from xlt.common import now_iso, read_json, write_json
 from xlt.discovery import Discovery, maybe_mdns
@@ -59,7 +59,7 @@ class PeerServer(_Reuse):
         sock, addr = super().get_request()
         try:
             secured = self.ctx.wrap_socket(sock, server_side=True)
-            secured.settimeout(30)
+            secured.settimeout(180)
             return secured, addr
         except ssl.SSLError:
             try:
@@ -113,6 +113,20 @@ class PeerHandler(BaseHTTPRequestHandler):
             self._send(400, _err("BAD_ENVELOPE", "需要 JSON", self._req()))
             return None
 
+    def _attach_args(self):
+        parsed = urlparse(self.path)
+        q = parse_qs(parsed.query or "")
+        msg_id = self.headers.get("X-Xlt-Msg-Id") or (q.get("msg_id") or [""])[0]
+        att_id = self.headers.get("X-Xlt-Att-Id") or (q.get("att_id") or [""])[0]
+        offset = self.headers.get("X-Xlt-Offset") or (q.get("offset") or ["0"])[0]
+        length = self.headers.get("X-Xlt-Length") or (q.get("length") or [self.headers.get("Content-Length") or "0"])[0]
+        try:
+            offset_i = int(offset or 0)
+            length_i = int(length or 0)
+        except ValueError:
+            offset_i, length_i = -1, -1
+        return msg_id, att_id, offset_i, length_i
+
     def do_GET(self):
         member = self._member()
         if member is None:
@@ -120,6 +134,11 @@ class PeerHandler(BaseHTTPRequestHandler):
             return
         path = urlparse(self.path).path
         engine = self.server.engine
+        if path == "/xlt/v1/attachments":
+            msg_id, att_id, _off, _ln = self._attach_args()
+            code, payload = engine.on_attach_status(member, msg_id, att_id, self._req())
+            self._send(code, payload)
+            return
         if path == "/xlt/v1/health":
             self._send(200, engine.health_body())
             return
@@ -151,11 +170,24 @@ class PeerHandler(BaseHTTPRequestHandler):
         if member is None:
             self._send(401, _err("NOT_A_MEMBER", "证书不在成员名单里", req_id))
             return
+        path = urlparse(self.path).path
+        engine = self.server.engine
+        if path == "/xlt/v1/attachments":
+            msg_id, att_id, offset, length = self._attach_args()
+            if offset < 0 or length < 0:
+                self._send(400, _err("BAD_ENVELOPE", "附件偏移或长度无效", req_id))
+                return
+            try:
+                code, payload = engine.on_attach_chunk(member, msg_id, att_id, offset, length, self.rfile, req_id)
+            except Exception:
+                engine.log("附件写入出错\n" + traceback.format_exc())
+                self._send(500, _err("BUSY", "通讯员内部出错", req_id))
+                return
+            self._send(code, payload)
+            return
         data = self._read_json()
         if data is None:
             return
-        path = urlparse(self.path).path
-        engine = self.server.engine
         try:
             if path == "/xlt/v1/messages":
                 code, payload = engine.on_message(member, data.get("envelope") or {}, data.get("letter") or "", req_id)
@@ -254,11 +286,12 @@ class LocalHandler(BaseHTTPRequestHandler):
                     data.get("origin_window") or "",
                     data.get("in_reply_to"),
                     data.get("to_member"),
+                    data.get("attachments") or [],
                 )
                 self._send(200, result)
                 return
             if path == "/local/reply":
-                self._send(200, engine.local_reply(data.get("msg_id") or "", data.get("text") or "", data.get("status") or "replied"))
+                self._send(200, engine.local_reply(data.get("msg_id") or "", data.get("text") or "", data.get("status") or "replied", attachments=data.get("attachments") or []))
                 return
             if path == "/local/done":
                 self._send(200, engine.local_done(data.get("msg_id") or ""))

@@ -78,6 +78,7 @@ def main(argv=None) -> int:
     send.add_argument("--file")
     send.add_argument("--tag", action="append", default=[])
     send.add_argument("--origin-window", default="")
+    send.add_argument("--attach", action="append", default=[], help="附件路径，可重复。任意类型，走出口检查")
     send.set_defaults(func=cmd_send)
 
     reply = sub.add_parser("reply", help="回复一封已经收到的信")
@@ -85,6 +86,7 @@ def main(argv=None) -> int:
     reply.add_argument("--text", default="")
     reply.add_argument("--file")
     reply.add_argument("--status", default="replied", choices=["replied", "declined"])
+    reply.add_argument("--attach", action="append", default=[], help="附件路径，可重复。任意类型，走出口检查")
     reply.set_defaults(func=cmd_reply)
 
     done = sub.add_parser("done", help="标记已处理，不回信")
@@ -210,6 +212,9 @@ def cmd_trust(home: Home, args) -> int:
 
 def cmd_send(home: Home, args) -> int:
     letter = _letter(args)
+    err = _prepare_attach_arg(args)
+    if err:
+        return _emit({"status": "rejected", "reason": "EGRESS", "message": err})
     payload = {
         "op": "send",
         "to": args.to,
@@ -218,26 +223,41 @@ def cmd_send(home: Home, args) -> int:
         "letter": letter,
         "tags": args.tag,
         "origin_window": args.origin_window,
+        "attachments": list(args.attach or []),
     }
-    result = _call(home, "/local/send", payload)
+    result = _call(home, "/local/send", payload, timeout=86400 if args.attach else 25)
     if result is None:
-        _spool(home, payload)
-        result = {
-            "status": "queued",
-            "reason": "DAEMON_DOWN",
-            "message": "通讯员没在运行。信已保存在本机，执行 xlt serve 后会自动发出",
-            "to": args.to,
-        }
+        if args.attach and _daemon_alive(home):
+            result = {
+                "status": "queued",
+                "reason": "IN_FLIGHT",
+                "message": "等待超时，附件可能仍在传送。请看 xlt outbox，不要再发一次同样的附件",
+                "to": args.to,
+            }
+        else:
+            _spool(home, payload)
+            result = {
+                "status": "queued",
+                "reason": "DAEMON_DOWN",
+                "message": "通讯员没在运行。信已保存在本机，执行 xlt serve 后会自动发出",
+                "to": args.to,
+            }
     return _emit(result)
 
 
 def cmd_reply(home: Home, args) -> int:
     text = _letter(args)
-    payload = {"op": "reply", "msg_id": args.msg_id, "text": text, "status": args.status}
-    result = _call(home, "/local/reply", payload)
+    err = _prepare_attach_arg(args)
+    if err:
+        return _emit({"status": "rejected", "reason": "EGRESS", "message": err})
+    payload = {"op": "reply", "msg_id": args.msg_id, "text": text, "status": args.status, "attachments": list(args.attach or [])}
+    result = _call(home, "/local/reply", payload, timeout=86400 if args.attach else 25)
     if result is None:
-        _spool(home, payload)
-        result = {"status": "queued", "reason": "DAEMON_DOWN", "message": "通讯员没在运行。回信已记下，启动后会发出", "id": args.msg_id}
+        if args.attach and _daemon_alive(home):
+            result = {"status": "queued", "reason": "IN_FLIGHT", "message": "等待超时，附件可能仍在传送。请看 xlt outbox，不要再发一次同样的附件", "id": args.msg_id}
+        else:
+            _spool(home, payload)
+            result = {"status": "queued", "reason": "DAEMON_DOWN", "message": "通讯员没在运行。回信已记下，启动后会发出", "id": args.msg_id}
     return _emit(result)
 
 
@@ -341,7 +361,8 @@ def cmd_status(home: Home, args) -> int:
     print()
     print(f"待发 {len(snap['pending'])} 封")
     for item in snap["pending"]:
-        print(f"  {item.get('id')}  → {item.get('to_member')}  {item.get('subject') or '—'}  {item.get('letter_bytes')} 字节")
+        extra = f"  {item['attach_progress']}" if item.get("attach_progress") else ""
+        print(f"  {item.get('id')}  → {item.get('to_member')}  {item.get('subject') or '—'}  {item.get('letter_bytes')} 字节{extra}")
     print()
     print("窗口")
     for window in snap["windows"]:
@@ -363,7 +384,8 @@ def cmd_inbox(home: Home, args) -> int:
         return 0
     for item in rows:
         state = (item.get("state") or {}).get("status")
-        print(f"{item.get('id')}  {item.get('from_person')}  {item.get('type')}  {item.get('subject') or '—'}  {label(state)}  {item.get('letter_bytes')} 字节")
+        extra = f"  {item['attach_progress']}" if item.get("attach_progress") else ""
+        print(f"{item.get('id')}  {item.get('from_person')}  {item.get('type')}  {item.get('subject') or '—'}  {label(state)}  {item.get('letter_bytes')} 字节{extra}")
     return 0
 
 
@@ -386,7 +408,8 @@ def cmd_outbox(home: Home, args) -> int:
     rows = collect(home)["pending"]
     print(f"待发 {len(rows)} 封")
     for item in rows:
-        print(f"{item.get('id')}  → {item.get('to_member')}  尝试 {item.get('attempts')}  {item.get('subject') or '—'}")
+        extra = f"  {item['attach_progress']}" if item.get("attach_progress") else ""
+        print(f"{item.get('id')}  → {item.get('to_member')}  尝试 {item.get('attempts')}  {item.get('subject') or '—'}{extra}")
     return 0
 
 
@@ -503,13 +526,28 @@ def cmd_policy_check(home: Home, args) -> int:
     return 0
 
 
+def _prepare_attach_arg(args) -> str | None:
+    paths = list(getattr(args, "attach", None) or [])
+    if not paths:
+        return None
+    from xlt.attach import prepare_attachments
+
+    _prepared, err = prepare_attachments(paths)
+    return err
+
+
 def _letter(args) -> str:
     if getattr(args, "file", None):
         return Path(args.file).read_text(encoding="utf-8")
     return getattr(args, "text", "") or ""
 
 
-def _call(home: Home, path: str, payload: dict):
+def _daemon_alive(home: Home) -> bool:
+    runtime = read_json(runtime_path(home), {})
+    return _pid_alive(runtime.get("pid"))
+
+
+def _call(home: Home, path: str, payload: dict, timeout: int = 25):
     runtime = read_json(runtime_path(home), {})
     if not _pid_alive(runtime.get("pid")):
         return None
@@ -520,7 +558,7 @@ def _call(home: Home, path: str, payload: dict):
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=25) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.URLError:
         return None
