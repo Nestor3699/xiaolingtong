@@ -30,6 +30,15 @@ def load_cert(path: Path) -> x509.Certificate:
     return x509.load_pem_x509_certificate(Path(path).read_bytes())
 
 
+def load_cert_pem(pem: str | bytes) -> x509.Certificate:
+    raw = pem.encode("utf-8") if isinstance(pem, str) else pem
+    return x509.load_pem_x509_certificate(raw)
+
+
+def cert_to_pem(cert: x509.Certificate) -> str:
+    return cert.public_bytes(serialization.Encoding.PEM).decode("utf-8")
+
+
 def load_key(path: Path):
     return serialization.load_pem_private_key(Path(path).read_bytes(), password=None)
 

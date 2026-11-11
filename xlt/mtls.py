@@ -39,7 +39,9 @@ def context(cert: Path, key: Path, server: bool, trust: str) -> ssl.SSLContext:
     ctx.load_cert_chain(str(cert), str(key))
     if trust.strip():
         ctx.load_verify_locations(cadata=trust)
-    ctx.verify_mode = ssl.CERT_REQUIRED
+    # 服务端用 OPTIONAL：新同事的证明连接在对方还没登记我时也能完成握手；
+    # 是否放行仍由应用层按成员名单的指纹判断，没有证书或名单里没有就是 401。
+    ctx.verify_mode = ssl.CERT_OPTIONAL if server else ssl.CERT_REQUIRED
     return ctx
 
 
@@ -120,3 +122,46 @@ def request(
     if len(parts) < 2:
         raise OSError("对方没有返回 HTTP 状态")
     return int(parts[1]), resp
+
+
+def fetch_server_pem(ip: str, port: int, expect_fp: str, timeout: float = 2.0) -> str | None:
+    """在还没有对方 PEM 时，从宣布的 TCP 端口取出服务器证书并核对指纹。不出示客户端证书，以免对方尚未登记我时握手失败。"""
+    from xlt.crypto import cert_to_pem
+
+    raw = socket.create_connection((ip, int(port)), timeout=timeout)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    ssock = ctx.wrap_socket(raw, server_hostname="xlt.local")
+    try:
+        der = ssock.getpeercert(True)
+        if not der:
+            return None
+        got = cert_from_der(der)
+        if fingerprint_cert(got).upper() != (expect_fp or "").upper():
+            return None
+        return cert_to_pem(got)
+    finally:
+        ssock.close()
+
+
+def prove_peer(ip: str, port: int, expect_fp: str, trust_pem: str, timeout: float = 2.0) -> str | None:
+    """用声称的证书作信任锚，确认该地址出示的就是这张证书。不出示客户端证书。
+
+    成功返回 None；失败返回原因（指纹不符或连不上）。
+    """
+    raw = socket.create_connection((ip, int(port)), timeout=timeout)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ctx.check_hostname = False
+    ctx.load_verify_locations(cadata=trust_pem)
+    ctx.verify_mode = ssl.CERT_REQUIRED
+    ssock = ctx.wrap_socket(raw, server_hostname="xlt.local")
+    try:
+        got = peer_fingerprint(ssock)
+        if got.upper() != (expect_fp or "").upper():
+            return f"对方出示的指纹是 {got}"
+        return None
+    finally:
+        ssock.close()

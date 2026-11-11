@@ -31,7 +31,7 @@
 **硬规则（全程遵守）：**
 
 - 永远不要发送、打印、复制到聊天或日志里：私钥 `*.key`、`.env`、密码、webhook 的网址和密钥。
-- 证书 `*.crt` 和指纹**可以**交给同事，但必须成对给（见第 2 步）。
+- 默认会自动发现同事，不必交换证书。若改用手工模式（`auto_trust: false` / `xlt init --no-auto-trust`），证书 `*.crt` 和指纹必须成对交给同事（见附录「手工交换证书」）。
 - 不要改、不要删除主人其它项目（尤其不要动 `~/PB_MVP` 或任何与小灵通无关的目录）。
 - 不要加 `--home`，数据默认在 `~/.xlt`（Windows：`%USERPROFILE%\.xlt`），除非主人明确要求换目录。
 - 不要对 `xlt` 发明文档里没有的开关。
@@ -134,28 +134,20 @@ $Xlt = "$env:USERPROFILE\xiaolingtong\.venv\Scripts\xlt.exe"
 
 ---
 
-## 2. 生成本机证书，并把证书和指纹交给同事
+## 2. 生成本机证书（默认自动发现同事）
 
-**目标：** 这台电脑有自己的证书；主人把「证书文件 + 指纹」成对发给同事。登记同事证书（第 3 步 `xlt trust`）时，会自动授予对方普通写信权限，不必再手改 `policy.yaml`。
+**目标：** 这台电脑有自己的证书；启动通讯员之后，会在局域网里自动发现并登记同事，一般不必再交换证书或执行 `xlt trust`。
+
+自动登记和手工 `xlt trust` **都只授予普通写信权限**：提问（`ask`）、通知（`notify`）、回信（`reply`），以及这些信上的附件。读文件、列目录、搜索等其它权限一律保持关闭，**只有本机主人**能在 `policy.yaml` 或 `xlt policy` 里打开；对方广播或发来的任何内容都不能给自己加权限。
 
 ### 2.1 运行 `xlt init`
-
-按第 0 步记下的身份，只运行对应的**一条**（不要加 `--home`）：
 
 ```bash
 # macOS 示例；Windows 把 $XLT 换成 $Xlt，命令和参数相同
 "$XLT" init --me runda-mac --person runda --owner 润达
 ```
 
-五人对照（把机器名、人名、显示名换成主人的那一行）：
-
-```bash
-"$XLT" init --me nes-mac --person nes --owner Nes
-"$XLT" init --me leo-mac --person leo --owner 沈总
-"$XLT" init --me runda-mac --person runda --owner 润达
-"$XLT" init --me haonian-win --person haonian --owner 浩年
-"$XLT" init --me mario-win --person mario --owner 博洋
-```
+把 `runda-mac` / `runda` / `润达` 换成第 0 步记下的本机机器名、人名 id、显示名。
 
 命令会打印大约这些行（路径随用户名而变；指纹是一串用冒号分隔的大写十六进制）：
 
@@ -163,45 +155,35 @@ $Xlt = "$env:USERPROFILE\xiaolingtong\.venv\Scripts\xlt.exe"
 机器名：runda-mac
 人名：runda
 私钥（不要发给任何人）：/Users/<用户>/.xlt/tls/runda-mac.key
-证书（可以发给同事）：/Users/<用户>/.xlt/tls/runda-mac.crt
+证书：/Users/<用户>/.xlt/tls/runda-mac.crt
 SHA-256 指纹：AA:BB:CC:…
-请把「证书文件 + 上面整行指纹」发到团队群或共享文件夹，让每位同事用 xlt trust 登记你。
-你也要用同样方式登记他们的证书和指纹（必须双向，缺一边就发不成信）。
+本机已就绪。默认会在局域网里自动发现并登记同事，不必再交换证书。
+自动登记和手工 xlt trust 都只授予普通写信权限：提问（ask）、通知（notify）、回信（reply），以及这些信上的附件。
+读文件、列目录、搜索等权限只有本机主人能在政策里打开；对方不能通过广播或来信给自己加权限。
+若网络里有不可信的设备，把 config.json 里的 auto_trust 设为 false，或下次用 xlt init --no-auto-trust。
 私钥留在这台电脑，不要发给任何人。
 ```
 
-**怎么判断成功：** 同时出现「证书（可以发给…）」和「SHA-256 指纹：」两行；并且这两个文件存在（把 `<机器名>` 换成本机机器名）：
+**怎么判断成功：** 同时出现「本机已就绪」和「SHA-256 指纹：」；并且这两个文件存在（把 `<机器名>` 换成本机机器名）：
 
-- 证书（可以分享）：`~/.xlt/tls/<机器名>.crt`
-- 私钥（绝对不能分享）：`~/.xlt/tls/<机器名>.key`
+- 证书（默认不必分享）：`~/.xlt/tls/<机器名>.crt`
+- 私钥（永远不分享）：`~/.xlt/tls/<机器名>.key`
 
-Windows 路径是 `%USERPROFILE%\.xlt\tls\<机器名>.crt` 和对应的 `.key`。
-
-**失败时：** 若打印「已经有证书 … 不想覆盖，所以停下来。」——不要删除已有 `.key`。问主人是沿用现有证书，还是另有安排。沿用时：把已有的 `.crt` 和指纹交给同事即可。指纹可用下面这条打印（只打印指纹，不要去读或打印 `.key`）：
+**失败时：** 若打印「已经有证书 … 不想覆盖，所以停下来。」——不要删除已有 `.key`。问主人是沿用现有证书，还是另有安排。沿用时：默认仍然会自动发现同事，不必再发证书。若要查看指纹（只打印指纹，不要去读或打印 `.key`）：
 
 ```bash
-"$HOME/xiaolingtong/.venv/bin/python" -c "from pathlib import Path; from xlt.crypto import load_cert, fingerprint_cert; import sys; print(fingerprint_cert(load_cert(Path.home()/'.xlt'/'tls'/sys.argv[1])))" "<机器名>.crt"
+"$HOME/xiaolingtong/.venv/bin/python" -c "from pathlib import Path; from xlt.crypto import load_cert, fingerprint_cert; print(fingerprint_cert(load_cert(Path.home()/'.xlt'/'tls'/'<机器名>.crt')))"
 ```
 
-### 2.2 请主人把证书和指纹成对发到团队群 / 共享文件夹
+若主人明确要求「不要自动登记，改回手工交换证书」，初始化时加 `--no-auto-trust`，或把 `~/.xlt/config.json` 里的 `auto_trust` 改为 `false`，然后按附录「手工交换证书」操作。不要在不信任的网络上使用默认的自动登记。
 
-明确告诉主人，请他**一次性同时发出下面两样**（缺一样，对方无法安全地登记你）：
+### 2.2 不必交换证书
 
-1. **证书文件本身**：`~/.xlt/tls/<机器名>.crt`（把这个文件发到群里或放到共享文件夹，并写下它的路径或文件名）。
-2. **指纹全文**：`xlt init` 打印的那行 `SHA-256 指纹：` 后面的整串（含冒号）。请主人在群里用文字再贴一遍，方便对方核对。
-
-并明确列出**不要发送、不要上传、不要截图到群里的东西**：
-
-- `~/.xlt/tls/<机器名>.key`（私钥）
-- `.env`、密码、API 密钥
-- `~/.xlt/secrets/` 下的任何文件（包括 webhook 的网址和密钥）
-- 只发证书却不发指纹，或只发指纹却不发证书文件
-
-你自己也不要在对话里打印私钥或密钥文件内容。把证书路径和指纹告诉主人即可。
+默认（`auto_trust` 为 true）不必把证书或指纹发到群里，也不必请同事执行 `xlt trust`。第 3 步说明如何确认名单，第 4 步启动通讯员后就会互相发现。
 
 ### 2.3 权限（一般不用手改）
 
-第 3 步用 `xlt trust` 登记一位同事时，会自动授予对方普通写信权限（`ask` / `notify` / `reply`）。**读文件、列目录、搜索默认仍然拒绝**，不要把 `default` 改成 allow，也不要把 `~/.xlt`、`secrets`、`.ssh`、`.env` 写进任何 `allow_paths`。
+自动发现或 `xlt trust` 登记一位同事时，会自动授予对方普通写信权限（`ask` / `notify` / `reply`，含这些信上的附件）。**读文件、列目录、搜索默认仍然拒绝**，不要把 `default` 改成 allow，也不要把 `~/.xlt`、`secrets`、`.ssh`、`.env` 写进任何 `allow_paths`。这些更高权限只有本机主人能打开；不要指望、也不要让对方通过广播或来信给自己加权限。
 
 已有安装、升级代码之后：对每位已登记的同事再跑一次同样的 `xlt trust`（会补上授权，不重复添加）；或者一次跑：
 
@@ -209,74 +191,25 @@ Windows 路径是 `%USERPROFILE%\.xlt\tls\<机器名>.crt` 和对应的 `.key`�
 "$XLT" policy grant-trusted
 ```
 
-若主人明确要求「只加证书、先不要让对方写信」，登记时加 `--no-grant`。之后要放开，再跑一次不带该开关的 `xlt trust`，或执行 `xlt policy grant-trusted`。
+若主人明确要求「只加证书、先不要让对方写信」，手工登记时加 `--no-grant`。之后要放开，再跑一次不带该开关的 `xlt trust`，或执行 `xlt policy grant-trusted`。
 
 以后若要让同事读某个项目目录，再在 `~/.xlt/policy.yaml` 里增加带 `allow_paths` 和 `operations: [list, read, search]` 的授权；密钥目录仍然不要写进去。改完跑 `"$XLT" policy check`。手改政策文件时，不要删掉 `g-trust-<人名>` 那几条，除非主人就是要收回写信权限。
 
----
+## 3. 确认同事会出现在名单里（通常不必手工登记）
 
-## 3. 登记同事的证书（必须双向）
+**目标：** 了解默认的自动登记。通讯员还没启动时，名单里往往只有你自己，这是正常的。
 
-**目标：** 把主人拿到的每一位同事的「证书 + 指纹」登记进本机名单，并核对指纹一致。
+默认开启 `auto_trust` 时：双方只要都完成 `xlt init` 并启动通讯员，就会在局域网里互相发现、把对方写入 `xlt-directory.yaml` 和 `peers/<机器名>.crt`，并授予上面说的普通写信权限。不必再交换证书，也不必执行 `xlt trust`。手工 `xlt trust` 仍然可用（例如补授权、或 `auto_trust` 已关闭时）。
 
-认人靠证书指纹，不靠 IP。名单里只有你自己时，**还不能给同事发信**。
-
-这是**双向**的，缺一边就发不成：
-
-- **你登记他：** 主人拿到某位同事的 `.crt` 和他所发的指纹后，你在这台电脑上执行下面的 `xlt trust`。
-- **他登记你：** 第 2 步已经请主人把你的证书和指纹发到群里。请主人提醒对方（或对方的 AI）同样执行 `xlt trust`。你无法代替对方操作。在对方也登记你、并且双方通讯员都在运行之前，第 6 步的测试信可能是 `queued` 或 `rejected`，这是正常的，不必反复重发。
-
-不要对本机自己的机器名再 `trust` 一遍。
-
-### 3.1 对每一位同事执行 `xlt trust`
-
-每拿到一份同事的 `.crt` 和他所公布的指纹，就做一次。先把证书文件放到一个你知道的路径（例如桌面或下载文件夹），记下路径。
-
-`xlt trust` **必填**只有 `--name`（对方机器名）和 `--crt`（证书文件路径）。推荐把 `--person`、`--owner`、`--os`、`--primary` 也写上，避免用到默认值。注意：
-
-- `--os` 的默认值是 `macos`。Windows 同事（`haonian-win`、`mario-win`）**必须**写 `--os windows`，不要漏。
-- `--person` 若不写，程序会从机器名去掉末尾的 `-mac` / `-win` 当作人名 id（例如 `haonian-win` → `haonian`）。
-- `--owner` 若不写，就用人名 id。
-- `--primary` 是开关，后面不要跟值。一人多台电脑时，发信认带这个标记的那一台；现在每人一台，也请加上。
-- 可选：`--lan-ip`、`--port`（默认 47800）、`--tailscale-ip`。办公室发现默认靠 UDP 广播，通常不用填 IP。若双方都开着 Clash TUN / Tailscale 而互相发现不了，再补上对方的 `--lan-ip`（必要时加上 `--tailscale-ip`），见附录 B。
-- **没有**「先核指纹再登记」的专用开关。登记后命令会打印从证书算出来的指纹，你必须立刻和对方在群里贴的那一串逐字核对（字母大小写不敏感，冒号要一致）。也可以在 `trust` 之前先算一遍：
-
-```bash
-"$HOME/xiaolingtong/.venv/bin/python" -c "from pathlib import Path; from xlt.crypto import load_cert, fingerprint_cert; print(fingerprint_cert(load_cert(Path(r'<证书文件路径>'))))"
-```
-
-核对一致后再登记。把下面的机器名、人名、显示名、系统和 `<证书文件>` 换成**这一位同事**的（不是主人自己的）：
-
-```bash
-"$XLT" trust --name nes-mac --person nes --owner Nes --os macos --crt <证书文件> --primary
-"$XLT" trust --name leo-mac --person leo --owner 沈总 --os macos --crt <证书文件> --primary
-"$XLT" trust --name runda-mac --person runda --owner 润达 --os macos --crt <证书文件> --primary
-"$XLT" trust --name haonian-win --person haonian --owner 浩年 --os windows --crt <证书文件> --primary
-"$XLT" trust --name mario-win --person mario --owner 博洋 --os windows --crt <证书文件> --primary
-```
-
-成功时打印：
-
-```
-已信任 nes-mac（nes）
-指纹：AA:BB:CC:…
-请和本人对一下指纹的前几位。名单文件已被重写，手写注释不会保留。
-已授予 nes 普通写信权限（ask / notify / reply）。读文件、列目录、搜索仍默认拒绝，需要时再改政策。
-```
-
-（若对方本来就有授权，会改说「已有普通写信权限……未改政策文件」。）
-
-**怎么判断成功：** 出现「已信任 …」；打印出的「指纹：」与对方在群里贴的全文一致；并出现授予或「已有」普通写信权限的那一行。不一致就停下来告诉主人：证书文件可能拿错或被改过。不要启动互发。没有「取消信任」命令；同一 `--name` 再跑一次 `xlt trust` 会用新证书覆盖旧记录，并在缺少授权时补上。
-
-### 3.2 用 `xlt peers` 查看名单
+用下面的命令查看名单（通讯员启动前通常是「离线」）：
 
 ```bash
 "$XLT" peers
 ```
 
-**怎么判断成功：** 每登记一位，这里就会多一行，格式是 `机器名  状态  地址  最后见到`。通讯员还没启动时，状态通常是「离线」，地址可能是 `—`，这没问题。若打印「名单里还没有其他同事。」，说明还没成功 `trust` 过别人，回到 3.1。
+若打印「名单里还没有其他同事。」，先进入第 4 步启动通讯员，等双方都在线后再看一次。若某人的证书被后来的同名广播替换，这里和 `xlt status` 会打出「警告：证书已替换」以及旧/新指纹，并写入 `messenger.log`。
 
----
+只有主人要求关闭自动登记时，才按附录「手工交换证书」对每一位同事执行 `xlt trust`（必须双向）。不要对本机自己的机器名再 `trust` 一遍。
 
 ## 4. 启动通讯员，并设置登录后自启
 
@@ -417,9 +350,9 @@ launchctl kickstart -k gui/$(id -u)/com.xiaolingtong.gateway
 
 `xlt status` 应显示：本机主人、机器名、人名、默认窗口；一张同事表（成员、状态、地址、待发、最后见到）；待发箱；已登记窗口；最近的信（只有信封，没有正文）。
 
-`xlt peers` 里，对方通讯员也在跑且局域网通时，状态会变成「在线」。双方都已 `trust` 但对方没开通讯员时是「离线」。
+`xlt peers` 里，对方通讯员也在跑且局域网通时，状态会变成「在线」（默认会自动登记，不必先 `trust`）。对方没开通讯员时是「离线」。
 
-请主人指定一位**已经登记、并且最好已在线**的同事（人名 id，例如 `nes`），发一封测试通知。不要在正文里放任何密钥。
+请主人指定一位**最好已在线**的同事（人名 id，例如 `nes`），发一封测试通知。不要在正文里放任何密钥。对方通讯员若已在跑，默认会自动出现在名单里。
 
 ```bash
 "$XLT" send --to nes --type notify --subject "小灵通自检" --text "通讯员已在本机启动，这是一封测试通知。"
@@ -430,8 +363,8 @@ launchctl kickstart -k gui/$(id -u)/com.xiaolingtong.gateway
 | `status` | 含义 | 你要做什么 |
 |---|---|---|
 | `delivered` | 对方已收下（`message` 多为「对方已收下」；若是「对方已收过，已从待发箱移除」也算成功） | 成功。把消息 `id` 告诉主人即可 |
-| `queued` | 对方此刻离线或还没登记你，信已进你这边的待发箱 | 不必重发。对方上线且双方都 trust 之后会自动补发。用 `xlt outbox` 或 `xlt status` 查看 |
-| `rejected` | 被拒绝 | 把完整 JSON 交给主人转给 Nes。常见：`UNKNOWN_PERSON`（你还没 trust 对方）、`NO_GRANT`（对方还没 trust 你，或用了 `--no-grant`）、通讯员没运行（会提示先 `xlt serve`） |
+| `queued` | 对方此刻离线，或还没发现你，信已进你这边的待发箱 | 不必重发。对方上线后会自动补发。用 `xlt outbox` 或 `xlt status` 查看 |
+| `rejected` | 被拒绝 | 把完整 JSON 交给主人转给 Nes。常见：`UNKNOWN_PERSON`（还没发现对方，或关闭了 auto_trust 且未手工 trust）、`NO_GRANT`（对方关闭了自动授权、用了 `--no-grant`，或你在请求读文件等未开放的权限）、通讯员没运行（会提示先 `xlt serve`） |
 
 `xlt send` 在通讯员没运行时仍会把信先存到本机，JSON 里 `status` 为 `queued`，`message` 为「通讯员没在运行。信已保存在本机，执行 xlt serve 后会自动发出」。先把通讯员拉起来，不必改信件内容再发一次。
 
@@ -439,15 +372,16 @@ launchctl kickstart -k gui/$(id -u)/com.xiaolingtong.gateway
 
 ## 7. 以后要加入新成员时
 
-**新来的人**（和他电脑上的 AI）：从本文第 0 步做到第 6 步。他把自己的 `.crt` 和指纹发到团队群，并收集每一位现有同事的 `.crt` 和指纹，逐个 `xlt trust`（会自动授予对方写信权限）。
+**新来的人**（和他电脑上的 AI）：从本文第 0 步做到第 6 步。默认不必收集或分发证书；启动通讯员后会自动进入现有同事的名单，并只获得普通写信权限。
 
 **每一位已经在用的人**（你若在现有成员的电脑上）：
 
-1. 向主人要到新人成对的 `.crt` 和指纹，按第 3 步执行 `xlt trust`（Windows 新人记得 `--os windows`），核对指纹。这一步同时补上写信授权，不必再手改 `policy.yaml`。
-2. 保持本机通讯员运行，方便新人做第 6 步测试。
+1. 保持本机通讯员运行，方便新人被自动发现。
+2. 新人出现后，`xlt peers` 里会多一行。若看到「证书已替换」警告，告诉主人并核对本机 `messenger.log`。
 3. 仍然不要收、不要转发任何 `.key`。
+4. 不要为了「迎接新人」去改政策、给对方加读文件等权限，除非主人明确要求。
 
----
+若这台机器关闭了 `auto_trust`，则改走附录「手工交换证书」。
 
 ## 附件
 
@@ -482,7 +416,9 @@ launchctl kickstart -k gui/$(id -u)/com.xiaolingtong.gateway
 | 标记已处理、不回信 | `"$XLT" done <消息id>` |
 | 看收件箱 / 待发箱 | `"$XLT" inbox`　`"$XLT" outbox` |
 | 检查权限清单 | `"$XLT" policy check` |
-| 给已登记同事补上写信权限 | `"$XLT" policy grant-trusted`（已有安装升级后用；新的 `xlt trust` 会自动授予） |
+| 给已登记同事补上写信权限 | `"$XLT" policy grant-trusted`（已有安装升级后用；自动发现或 `xlt trust` 会授予普通写信权限） |
+| 关闭自动登记 | `xlt init --no-auto-trust`，或把 `~/.xlt/config.json` 的 `auto_trust` 设为 `false`；之后按附录手工交换证书 |
+| 手工登记同事（可选） | `"$XLT" trust --name <机器名> --person <人名id> --owner <显示名> --os macos\|windows --crt <证书文件> --primary` |
 | 注销窗口 | `"$XLT" unregister --window <窗口名>`（信箱文件还在） |
 | 试路由 | `"$XLT" route test --type ask --from nes` |
 
@@ -496,10 +432,11 @@ launchctl kickstart -k gui/$(id -u)/com.xiaolingtong.gateway
 |---|---|
 | `xlt peers` 里同事一直「离线」，互相发现不了 | 双方 `xlt serve` 是否在跑；路由器是否开了「AP 隔离 / 设备隔离」；Windows 是否「专用网络」；防火墙是否放行了 **UDP 47801** 和 **TCP 47800**（仅专用、仅本子网）；macOS 是否点了「本地网络 / 传入连接」允许。办公室发现靠 UDP 广播，不是靠填 IP。若本机开着 Clash / Surge TUN 或 Tailscale，先看下一行 |
 | VPN（Clash TUN / 虚拟网卡）下发现不了 | 双方都运行 `"$XLT" doctor`（或 `xlt status` 里的「网络诊断」）。选中的地址必须是办公室网卡上的 `192.168.x` / `10.x`（例如 Wi-Fi `en0`），不能是 `198.18.x`（Clash/Surge Fake-IP）或 `100.x`（Tailscale）。Clash Verge 可以继续开着 TUN，但要保证局域网直出：规则里加上 `IP-CIDR,192.168.0.0/16,DIRECT`（或 `GEOIP,LAN,DIRECT` / 打开 bypass private / 绕过私有地址）；Windows 开 TUN 时把 **strict route / 严格路由** 关掉，否则本机发出的局域网包也会被收走。macOS 防火墙必须允许 **Python 传入连接**。修好规则并重启双方通讯员后再看 `xlt peers`。若广播仍过不去：双方用 `xlt trust … --lan-ip <对方办公室IP>` 登记对方的局域网地址（发现包会单播补发）；再不行，加上 `--tailscale-ip <对方 Tailscale IP>`，通讯员在局域网失败时会走 Tailscale |
-| 发信 `rejected`，`UNKNOWN_PERSON` | 你还没对对方做 `xlt trust`，或 `--to` 写错了人名 id |
-| 发信 `rejected`，`NO_GRANT` / 「没有被授权做这件事」 | 对方还没对你做 `xlt trust`，或用了 `--no-grant`，或手改政策时删掉了授权。请对方再跑一次 `xlt trust`（同一证书即可补上），或执行 `xlt policy grant-trusted`。你这边待发箱不必重写 |
+| 发信 `rejected`，`UNKNOWN_PERSON` | 还没发现对方（双方通讯员是否都在跑），或关闭了 auto_trust 且未手工 `xlt trust`，或 `--to` 写错了人名 id |
+| 发信 `rejected`，`NO_GRANT` / 「没有被授权做这件事」 | 若走自动发现，等双方都在线后再发；或对方用了 `--no-grant`、关闭了 auto_trust、或手改政策时删掉了授权。请对方再跑一次 `xlt trust`（同一证书即可补上），或执行 `xlt policy grant-trusted`。若你请求的是读文件等权限，那本来就不会自动授予，只有对方主人能在本机打开 |
+| `xlt status` / `peers` 出现「证书已替换」 | 同名同事的证书指纹变了（可能是重装，也可能是局域网里有人冒用这个名字）。对照 `~/.xlt/messenger.log` 里的旧/新指纹告知主人 |
 | 指纹对不上 / 日志里出现指纹不符 | 证书文件和群里贴的指纹不是同一份，或登记时拿错了文件。停止互发，重新拿到成对的 `.crt` 和指纹，对同一 `--name` 再跑一次 `xlt trust`，核对打印出的指纹全文 |
-| 发信 `queued` | 对方关机、睡眠、通讯员没运行，或对方还没登记你。信在你这边的待发箱，条件满足后会自动补发，不用重发。用 `xlt outbox` 或 `xlt status` 查看 |
+| 发信 `queued` | 对方关机、睡眠、通讯员没运行，或还没发现你。信在你这边的待发箱，条件满足后会自动补发，不用重发。用 `xlt outbox` 或 `xlt status` 查看 |
 | 发信 `rejected`，出口检查 / 附件被拒 | 信纸或附件像是密钥、`.env`、`.pem`、`.key`、`id_rsa*`，或文本里有口令一类内容。换一份不含敏感信息的文件。证书 `.crt` 可以发，`.key` 不行 |
 | 附件传送中断 | 不必重发。对方上线后会从断点续传。`xlt outbox` / `xlt status` 里能看到「附件 m/n 已传/总共」 |
 | `xlt send` 说通讯员没在运行 | 先 `xlt serve` 或检查自启是否真的起来了 |
@@ -691,8 +628,8 @@ Windows 把 `--secret-file` 写成 `%USERPROFILE%\.xlt\secrets\grokbot.webhook`�
 小灵通通讯员是常驻的小程序，本身不是 AI，待机不耗模型额度。它只做：用证书证明「我是这台电脑」、在局域网里发现同事、把信送到对方电脑。电脑必须开着且通讯员在运行；不做开机唤醒。对方关机或睡眠时，信先留在发信人的待发箱，对方上线后自动补发。
 
 - 五台办公室电脑：三台 Mac（Nes、沈总 Leo、润达），两台 Windows（浩年、博洋 Mario）。每人可使用 Claude Code、DeepSeek Harness、Codex、Grok Bot、pi，都是个人账号。
-- 认人靠双向 TLS 证书指纹，不靠 IP。UDP 47801 广播上线 / 应答 / 心跳（默认约 3 分钟一次）。
-- 权限分两层：第一层是通讯员按 `policy.yaml` 硬检查（默认拒绝，零 token，不通过就不叫醒 AI）；第二层才是收信 AI 判断该不该答。敏感路径由程序黑名单挡住，政策放行不了。
+- 认人靠双向 TLS 证书指纹，不靠 IP。UDP 47801 广播上线 / 应答 / 心跳（默认约 3 分钟一次），广播里带上身份和证书；默认 `auto_trust` 会自动写入名单。同一局域网里的设备可能冒用机器名替换证书，这是已知风险。
+- 权限分两层：第一层是通讯员按 `policy.yaml` 硬检查（默认拒绝，零 token，不通过就不叫醒 AI）；第二层才是收信 AI 判断该不该答。敏感路径由程序黑名单挡住，政策放行不了。自动登记和 `xlt trust` 只授予 `ask` / `notify` / `reply`（含这些信上的附件）；其它权限只有本机主人能开，发送方不能给自己加权限。
 - 信分信封和信纸。信封由程序生成（发信人以证书为准）。信纸是不可信输入。
 - 回信一律走 `xlt reply`（或各 AI 提供的 `xlt_reply` 工具，最终还是调用本机通讯员），会做出口检查（例如正文里的私钥块不会发出去）。
 - 本机状态页只显示信封（谁、何时、编号、标题、大小），不显示正文。
@@ -701,3 +638,30 @@ Windows 把 `--secret-file` 写成 `%USERPROFILE%\.xlt\secrets\grokbot.webhook`�
 **已在 Nes 的 Mac 上验证过：** 同一台机器上开多个通讯员实例互发；真 pi（扩展 + 非交互 `pi --mode rpc`）能自动收信并用 `xlt reply` 回信；真 Grok Bot（webhook 叫醒后读信箱、用 `xlt reply` 回信；HTTP 200，约 40 秒）。
 
 **还没有验证过：** 两台真实电脑经办公室局域网互发现、互发信；Windows 上的安装、专用网络、防火墙、开机自启、Codex 弹窗；真实 Claude Code 里加载 Channel；DeepSeek Harness 无头值班真正收一封信。
+
+---
+
+## 附录 E. 手工交换证书（可选；关闭 auto_trust 时用）
+
+默认不必走这一附录。仅当主人要求 `xlt init --no-auto-trust`，或把 `~/.xlt/config.json` 的 `auto_trust` 设为 `false` 时，才需要双方交换证书并执行 `xlt trust`。
+
+证书 `.crt` 和指纹必须成对给；**永远不要发送 `.key` 私钥**。
+
+1. 请主人把本机 `~/.xlt/tls/<机器名>.crt` 和 `xlt init` 打印的整行指纹发到团队群或共享文件夹，并请对方也这样发出他们的证书和指纹。
+2. 先核对指纹（字母大小写不敏感，冒号要一致）：
+
+```bash
+"$HOME/xiaolingtong/.venv/bin/python" -c "from pathlib import Path; from xlt.crypto import load_cert, fingerprint_cert; print(fingerprint_cert(load_cert(Path(r'<证书文件路径>'))))"
+```
+
+3. 对每一位同事执行（Windows 同事必须加 `--os windows`；`--primary` 是开关，不要跟值）：
+
+```bash
+"$XLT" trust --name nes-mac --person nes --owner Nes --os macos --crt <证书文件> --primary
+"$XLT" trust --name leo-mac --person leo --owner 沈总 --os macos --crt <证书文件> --primary
+"$XLT" trust --name runda-mac --person runda --owner 润达 --os macos --crt <证书文件> --primary
+"$XLT" trust --name haonian-win --person haonian --owner 浩年 --os windows --crt <证书文件> --primary
+"$XLT" trust --name mario-win --person mario --owner 博洋 --os windows --crt <证书文件> --primary
+```
+
+成功时会打印「已信任 …」和从证书算出的指纹，并授予普通写信权限（`ask` / `notify` / `reply`，含这些信上的附件）。读文件等权限仍默认拒绝。没有「取消信任」命令；同一 `--name` 再跑一次会用新证书覆盖旧记录。必须双向：你登记他，他也要登记你。不要对本机自己的机器名再 `trust` 一遍。

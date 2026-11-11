@@ -16,6 +16,8 @@ AI_TOOLS = ["claude-code", "deepseek-harness", "codex", "grok-bot", "pi"]
 
 POLICY_TEMPLATE = """\
 # 只有本机主人能改。没写允许的，一律拒绝。
+# 自动发现或 xlt trust 只会授予 ask / notify / reply（含这些信上的附件）。
+# 读文件、列目录、搜索等权限只有本机主人能在这里打开；对方不能通过广播或来信给自己加权限。
 version: 1
 owner: {person}
 default: deny
@@ -120,6 +122,7 @@ def default_config(me: str, person: str, owner: str) -> dict:
         "heartbeat_s": 180,
         "ip_auto": True,
         "mdns": False,
+        "auto_trust": True,
     }
 
 
@@ -141,7 +144,7 @@ def person_from_machine(name: str) -> str:
     return name
 
 
-def init_home(home: Home, me: str, person: str, owner: str) -> str:
+def init_home(home: Home, me: str, person: str, owner: str, auto_trust: bool = True) -> str:
     home.ensure()
     from xlt.crypto import generate_cert
 
@@ -152,6 +155,7 @@ def init_home(home: Home, me: str, person: str, owner: str) -> str:
     cfg["me"] = me
     cfg["person"] = person
     cfg["owner"] = owner
+    cfg["auto_trust"] = bool(auto_trust)
     save_config(home, cfg)
     agents = [member_record(me, person, owner, cfg["os"], fp, primary=True)]
     save_directory(home, agents)

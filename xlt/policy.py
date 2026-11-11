@@ -204,7 +204,7 @@ def check_file(policy_doc: dict) -> list[str]:
     return problems
 
 
-# 普通写信（登记同事时自动授予）。读文件 / 列目录 / 搜索仍须主人另行授权。
+# 普通写信（自动登记或 xlt trust 时授予，含这些信上的附件）。读文件 / 列目录 / 搜索仍须本机主人另行授权；广播或来信不能给自己加权限。
 LETTER_OPS = ("ask", "notify", "reply")
 FILE_OPS = ("list", "read", "search")
 AUTO_GRANT_PREFIX = "g-trust-"

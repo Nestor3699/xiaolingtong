@@ -77,10 +77,10 @@ def main() -> int:
             r = xlt(home, "init", "--me", me, "--person", person, "--owner", owner)
             if r.returncode != 0:
                 raise Fail("init 失败: " + r.stderr)
-            if "可以发给同事" not in r.stdout or "团队群" not in r.stdout:
-                raise Fail("init 文案未改为交给同事/团队群: " + r.stdout)
-            if "交给 Nes 登记" in r.stdout:
-                raise Fail("init 仍在让人把证书交给 Nes: " + r.stdout)
+            if "不必再交换证书" not in r.stdout and "已关闭自动登记" not in r.stdout:
+                raise Fail("init 文案应说明不必交换证书: " + r.stdout)
+            if "交给 Nes 登记" in r.stdout or "发到团队群" in r.stdout:
+                raise Fail("init 仍在让人交换证书: " + r.stdout)
         t1 = xlt(
             nes, "trust", "--name", "haonian-win", "--person", "haonian", "--owner", "浩年",
             "--os", "windows", "--port", "47620", "--crt", str(hao / "tls" / "haonian-win.crt"), "--primary",
@@ -91,9 +91,9 @@ def main() -> int:
         )
         if t1.returncode != 0 or t2.returncode != 0:
             raise Fail("trust 失败: " + (t1.stderr or "") + (t2.stderr or ""))
-        if "已授予 haonian 普通写信权限（ask / notify / reply）" not in t1.stdout:
+        if "已授予 haonian 普通写信权限（ask / notify / reply" not in t1.stdout:
             raise Fail("trust 未打印授予内容: " + t1.stdout)
-        if "已授予 nes 普通写信权限（ask / notify / reply）" not in t2.stdout:
+        if "已授予 nes 普通写信权限（ask / notify / reply" not in t2.stdout:
             raise Fail("trust 未打印授予内容: " + t2.stdout)
         for home, who in ((nes, "haonian"), (hao, "nes")):
             policy = (home / "policy.yaml").read_text(encoding="utf-8")

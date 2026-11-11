@@ -4,7 +4,7 @@
 
 人只写收信人的名字（`nes` / `leo` / `runda` / `haonian` / `mario`）。交给对方哪个 AI，由对方自己的规则决定。
 
-**给同事电脑上的 AI：** 请先读 [DEPLOY-AGENT.md](DEPLOY-AGENT.md)，按那份说明从上到下逐步安装，不要改命令、不要发明开关。证书文件和 SHA-256 指纹必须成对交给对方，双方都要执行 `xlt trust`，缺一边就发不成信。人自己看这份 README 即可。
+**给同事电脑上的 AI：** 请先读 [DEPLOY-AGENT.md](DEPLOY-AGENT.md)，按那份说明从上到下逐步安装，不要改命令、不要发明开关。默认会在局域网里自动发现同事，不必先交换证书。人自己看这份 README 即可。
 
 公开仓库：<https://github.com/Nestor3699/xiaolingtong>
 
@@ -25,13 +25,15 @@ python3 -m venv ~/.xlt/venv
 
 然后打开 [本机状态页](http://127.0.0.1:47321)。页面只在这台电脑上，别人从局域网打不开。
 
-`xlt init` 会打印证书指纹。请把 **`.crt` 文件和指纹** 发到团队群或共享文件夹，让每位同事用 `xlt trust` 登记；你也要登记他们的（必须双向）。**`.key` 私钥不要发给任何人。**
+`xlt init` 会生成本机证书。默认开启 `auto_trust`：通讯员在局域网里发现同事后会自动写入名单，不必再交换证书。**`.key` 私钥不要发给任何人。**
+
+同一局域网里的任何设备都可以加入，也可以用已经在用的机器名替换该成员的证书；不信任的网络请把 `auto_trust` 关掉（`xlt init --no-auto-trust`，或把 `~/.xlt/config.json` 里的 `auto_trust` 设为 `false`），再按部署说明附录手工交换证书。
 
 Windows 上把 `python3` 换成 `py -3`，目录是 `%USERPROFILE%\.xlt`。
 
 ## 把同事加进名单
 
-认人靠证书指纹，不靠 IP。Nes 收到同事的 `.crt` 之后，在每台电脑上执行（指纹以证书文件算出来的为准，再和本人对一下前几位）：
+默认不必手工登记：双方启动通讯员后会互相发现。认人靠证书指纹，不靠 IP。手工 `xlt trust` 仍然可用（关闭自动登记时必须用）：
 
 ```bash
 xlt trust --name haonian-win --person haonian --owner 浩年 --os windows --crt haonian-win.crt --primary
@@ -78,7 +80,7 @@ url=https://...
 key=crsr_...
 ```
 
-权限在 `~/.xlt/policy.yaml`，默认全部拒绝。`xlt trust` 登记同事时会自动授予普通写信权限（`ask` / `notify` / `reply`）；读文件、列目录、搜索仍须另行授权。已有安装可再跑一次 `xlt trust`，或执行 `xlt policy grant-trusted`。格式和方案 §5.5 一样。`xlt policy check` 会看一眼有没有把密钥目录写进允许列表。不想自动授权时用 `xlt trust --no-grant`。
+权限在 `~/.xlt/policy.yaml`，默认全部拒绝。自动发现或 `xlt trust` 都只授予普通写信权限：提问（`ask`）、通知（`notify`）、回信（`reply`），以及这些信上的附件。读文件、列目录、搜索以及其它权限一律保持关闭，只有本机主人能在政策里打开；对方不能通过广播或来信给自己加权限。已有安装可再跑一次 `xlt trust`，或执行 `xlt policy grant-trusted`。格式和方案 §5.5 一样。`xlt policy check` 会看一眼有没有把密钥目录写进允许列表。不想自动授予写信权限时用 `xlt trust --no-grant`。
 
 ## 五种 AI 怎么交到信
 

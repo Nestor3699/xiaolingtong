@@ -128,6 +128,7 @@ def collect(home: Home) -> dict:
                 "source": row.get("source") or ("static" if agent.get("lan_ip") else ""),
                 "pending": len(mine),
                 "note": row.get("last_offline_reason") or "",
+                "cert_warning": row.get("cert_warning") or "",
             }
         )
     windows = []
@@ -212,6 +213,10 @@ def render(snap: dict) -> str:
             f"<td>{_esc(peer['pending'])}</td>"
             f"<td>{_esc(peer['source'])}</td>"
             "</tr>"
+        )
+        if peer.get("cert_warning"):
+            peer_rows.append(
+                f"<tr><td colspan='6' class='warn'>{_esc(peer['cert_warning'])}</td></tr>"
         )
     if not peer_rows:
         peer_rows.append("<tr><td colspan='6' class='muted'>成员名单里还没有其他同事。用 xlt trust 把他们的证书加进来。</td></tr>")

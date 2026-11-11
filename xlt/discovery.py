@@ -13,10 +13,12 @@ from pathlib import Path
 from xlt.common import now_iso, parse_time
 from xlt.crypto import load_key, sign_obj, verify_obj
 from xlt.netinfo import bind_udp_to_iface, broadcast_addresses as real_broadcasts, choose_lan, unicast_targets
+from xlt.autitrust import admit_from_broadcast, auto_trust_enabled
 from xlt.store import Home, load_cache, load_config, load_directory, member_by_name, peer_cert, save_cache
 
 ONLINE_LIMIT = 10
 SKEW_SECONDS = 120
+PACKET_MAX = 4096
 
 
 def broadcast_addresses(ip: str) -> list[str]:
@@ -27,11 +29,12 @@ def broadcast_addresses(ip: str) -> list[str]:
 
 
 class Discovery(threading.Thread):
-    def __init__(self, home: Home, log, on_peer):
+    def __init__(self, home: Home, log, on_peer, on_trust=None):
         super().__init__(name="xlt-discovery", daemon=True)
         self.home = home
         self.log = log
         self.on_peer = on_peer
+        self.on_trust = on_trust
         self.cfg = load_config(home)
         self.stop = threading.Event()
         self.sock: socket.socket | None = None
@@ -44,6 +47,8 @@ class Discovery(threading.Thread):
         self.ready = threading.Event()
         self.send_sock: socket.socket | None = None
         self.net = None
+        self._admit_lock = threading.Lock()
+        self._admitting: set[str] = set()
 
     def run(self):
         cfg = self.cfg
@@ -84,7 +89,7 @@ class Discovery(threading.Thread):
         next_beat = time.time() + interval + random.uniform(-jitter, jitter)
         while not self.stop.is_set():
             try:
-                raw, src = sock.recvfrom(4096)
+                raw, src = sock.recvfrom(8192)
             except socket.timeout:
                 raw = None
                 src = None
@@ -178,16 +183,24 @@ class Discovery(threading.Thread):
         with self.seq_lock:
             self.seq += 1
             seq = self.seq
+        mine = member_by_name(self.home, me) or {}
+        pem = ""
+        crt_path = self.home.tls / f"{me}.crt"
+        if crt_path.exists():
+            pem = crt_path.read_text(encoding="utf-8")
         msg = {
             "xlt": 1,
             "type": kind,
             "name": me,
+            "person": cfg.get("person") or me,
             "owner": cfg.get("owner") or cfg.get("person") or me,
+            "os": cfg.get("os") or "",
             "host": socket.gethostname(),
             "ip": cfg.get("announce_ip") or cfg.get("bind_ip") or "",
             "port": int(cfg["tcp_port"]),
             "subnet": _subnet(cfg.get("announce_ip") or cfg.get("bind_ip") or "", self.net),
-            "cert_sha256": member_by_name(self.home, me).get("cert_sha256") if member_by_name(self.home, me) else "",
+            "cert_sha256": mine.get("cert_sha256") or "",
+            "ai_tools": list(mine.get("ai_tools") or []),
             "agents": _agent_hint(self.home),
             "version": "0.1.0",
             "boot_id": self.boot_id,
@@ -195,13 +208,21 @@ class Discovery(threading.Thread):
             "nonce": uuid.uuid4().hex[:8],
             "ts": now_iso(),
         }
+        if pem:
+            msg["cert"] = pem
         if reason and kind == "offline":
             msg["reason"] = reason
         key = load_key(key_path)
+        if pem:
+            trial = dict(msg)
+            trial["sig"] = sign_obj(key, trial)
+            if len(json.dumps(trial, ensure_ascii=False).encode("utf-8")) > PACKET_MAX:
+                msg.pop("cert", None)
+                self.log("发现包附带证书会超限，改为对方首次见到时从 TCP 取证书")
         msg["sig"] = sign_obj(key, msg)
         data = json.dumps(msg, ensure_ascii=False).encode("utf-8")
-        if len(data) > 2048:
-            self.log("发现包超过 2KB，已丢弃")
+        if len(data) > PACKET_MAX:
+            self.log(f"发现包超过 {PACKET_MAX} 字节，已丢弃")
             return None
         return data
 
@@ -213,18 +234,10 @@ class Discovery(threading.Thread):
             return
         if msg["name"] == self.cfg["me"]:
             return
-        self._remember(msg, src)
-        self.log(f"收到 {msg['type']} ← {msg['name']} @ {src[0]}:{msg.get('port')}")
-        if msg["type"] == "online":
-            now_s = time.time()
-            if now_s - self.last_reply.get(msg["name"], 0) > 5:
-                self.last_reply[msg["name"]] = now_s
-                threading.Thread(target=self._reply_later, args=(src,), daemon=True).start()
-        if msg["type"] != "offline":
-            try:
-                self.on_peer(msg["name"])
-            except Exception as exc:
-                self.log(f"上线后补发出错：{exc}")
+        if why == "admit":
+            self._schedule_admit(msg, src)
+            return
+        self._accept_known(msg, src)
 
     def _reply_later(self, src):
         time.sleep(random.uniform(0, 0.8))
@@ -237,8 +250,8 @@ class Discovery(threading.Thread):
                 self.log(f"应答失败：{exc}")
 
     def _check(self, raw: bytes):
-        if len(raw) > 2048:
-            return None, "超过 2KB"
+        if len(raw) > PACKET_MAX:
+            return None, f"超过 {PACKET_MAX} 字节"
         try:
             msg = json.loads(raw.decode("utf-8"))
         except Exception:
@@ -249,13 +262,20 @@ class Discovery(threading.Thread):
         if name == self.cfg.get("me"):
             return None, "自己"
         member = member_by_name(self.home, name)
-        if not member:
+        claimed = str(msg.get("cert_sha256") or "")
+        known_fp = str((member or {}).get("cert_sha256") or "")
+        same = bool(member and claimed and claimed.upper() == known_fp.upper())
+        if same:
+            cert = peer_cert(self.home, name)
+            if cert is None or not verify_obj(cert, msg):
+                return None, "签名无效"
+        elif auto_trust_enabled(self.home):
+            # 新人、或同名但指纹变了：先做完时间/重放检查，再去核验证书并写名单
+            pass
+        elif not member:
             return None, f"陌生成员 {name}"
-        if str(msg.get("cert_sha256", "")).upper() != str(member.get("cert_sha256", "")).upper():
+        else:
             return None, "证书指纹与名单不一致"
-        cert = peer_cert(self.home, name)
-        if cert is None or not verify_obj(cert, msg):
-            return None, "签名无效"
         try:
             skew = abs((parse_time(msg["ts"]) - parse_time(now_iso())).total_seconds())
         except Exception:
@@ -273,7 +293,55 @@ class Discovery(threading.Thread):
             recent.append(stamp)
             self.online_times[name] = recent
         self.seen_seq[name] = (msg.get("boot_id"), int(msg.get("seq") or 0))
+        if not same:
+            return msg, "admit"
         return msg, None
+
+    def _peer_ip(self, msg: dict, src) -> str:
+        ip = str(msg.get("ip") or "").strip()
+        if ip:
+            return ip
+        return src[0]
+
+    def _accept_known(self, msg: dict, src) -> None:
+        self._remember(msg, src)
+        self.log(f"收到 {msg['type']} ← {msg['name']} @ {src[0]}:{msg.get('port')}")
+        if msg["type"] == "online":
+            now_s = time.time()
+            if now_s - self.last_reply.get(msg["name"], 0) > 5:
+                self.last_reply[msg["name"]] = now_s
+                threading.Thread(target=self._reply_later, args=(src,), daemon=True).start()
+        if msg["type"] != "offline":
+            try:
+                self.on_peer(msg["name"])
+            except Exception as exc:
+                self.log(f"上线后补发出错：{exc}")
+
+    def _schedule_admit(self, msg: dict, src) -> None:
+        name = msg["name"]
+        with self._admit_lock:
+            if name in self._admitting:
+                return
+            self._admitting.add(name)
+        threading.Thread(target=self._admit, args=(msg, src), daemon=True, name=f"xlt-admit-{name}").start()
+
+    def _admit(self, msg: dict, src) -> None:
+        try:
+            ip = self._peer_ip(msg, src)
+            result = admit_from_broadcast(self.home, msg, ip, self.log)
+            if result is None:
+                return
+            if result in ("added", "replaced") and self.on_trust:
+                try:
+                    self.on_trust()
+                except Exception as exc:
+                    self.log(f"刷新信任库失败：{exc}")
+            self._accept_known(msg, src)
+        except Exception as exc:
+            self.log(f"自动登记出错 {msg.get('name')}：{exc}")
+        finally:
+            with self._admit_lock:
+                self._admitting.discard(msg.get("name") or "")
 
     def _remember(self, msg: dict, src):
         cache = load_cache(self.home)
@@ -294,6 +362,9 @@ class Discovery(threading.Thread):
         if msg.get("type") == "offline":
             row["last_offline_reason"] = msg.get("reason") or "quit"
             row["last_seen"] = now_iso()
+        prev = (cache.get("peers") or {}).get(msg["name"]) or {}
+        if prev.get("cert_warning"):
+            row["cert_warning"] = prev["cert_warning"]
         cache["peers"][msg["name"]] = row
         save_cache(self.home, cache)
 

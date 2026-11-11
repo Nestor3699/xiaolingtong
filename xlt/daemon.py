@@ -55,6 +55,11 @@ class PeerServer(_Reuse):
         self.ctx = ctx
         super().__init__(addr, PeerHandler)
 
+    def reload_trust(self) -> None:
+        home = self.engine.home
+        cfg = self.engine.cfg
+        self.ctx = context(self.engine.cert, home.tls / f"{cfg['me']}.key", server=True, trust=trust_pems(home))
+
     def get_request(self):
         sock, addr = super().get_request()
         try:
@@ -409,7 +414,10 @@ def serve(home: Home, args) -> int:
         print(f"状态页端口 127.0.0.1:{cfg['panel_port']} 绑定失败：{exc}", flush=True)
         return 1
 
-    disc = Discovery(home, log, lambda name: engine.executor.submit(engine.flush_member, name))
+    def _on_peer(name):
+        engine.executor.submit(engine.flush_member, name)
+
+    disc = Discovery(home, log, _on_peer, on_trust=peer.reload_trust)
     discovery_holder["disc"] = disc
 
     def send_offline(reason: str):

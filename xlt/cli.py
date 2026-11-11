@@ -44,6 +44,7 @@ def main(argv=None) -> int:
     init.add_argument("--me", required=True, help="机器名，如 nes-mac")
     init.add_argument("--person", help="人名 id，如 nes。不写就从机器名去掉 -mac/-win")
     init.add_argument("--owner", default="", help="给人看的名字，如 Nes")
+    init.add_argument("--no-auto-trust", action="store_true", help="关闭局域网自动登记，恢复为手工 xlt trust")
     init.set_defaults(func=cmd_init)
 
     trust = sub.add_parser("trust", help="把同事的证书登记进成员名单")
@@ -165,15 +166,21 @@ def cmd_init(home: Home, args) -> int:
     if (home.tls / f"{args.me}.key").exists():
         print(f"已经有证书 {home.tls / (args.me + '.key')}。不想覆盖，所以停下来。", file=sys.stderr)
         return 1
-    fp = init_home(home, args.me, person, owner)
+    fp = init_home(home, args.me, person, owner, auto_trust=not args.no_auto_trust)
     print(f"机器名：{args.me}")
     print(f"人名：{person}")
     print(f"私钥（不要发给任何人）：{home.tls / (args.me + '.key')}")
-    print(f"证书（可以发给同事）：{home.tls / (args.me + '.crt')}")
+    print(f"证书：{home.tls / (args.me + '.crt')}")
     print(f"SHA-256 指纹：{fp}")
-    print("请把「证书文件 + 上面整行指纹」发到团队群或共享文件夹，让每位同事用 xlt trust 登记你。")
-    print("你也要用同样方式登记他们的证书和指纹（必须双向，缺一边就发不成信）。")
-    print("私钥留在这台电脑，不要发给任何人。")
+    if args.no_auto_trust:
+        print("已关闭自动登记（auto_trust=false）。请按部署说明附录，与同事手工交换证书并用 xlt trust 双向登记。")
+        print("私钥留在这台电脑，不要发给任何人。")
+    else:
+        print("本机已就绪。默认会在局域网里自动发现并登记同事，不必再交换证书。")
+        print("自动登记和手工 xlt trust 都只授予普通写信权限：提问（ask）、通知（notify）、回信（reply），以及这些信上的附件。")
+        print("读文件、列目录、搜索等权限只有本机主人能在政策里打开；对方不能通过广播或来信给自己加权限。")
+        print("若网络里有不可信的设备，把 config.json 里的 auto_trust 设为 false，或下次用 xlt init --no-auto-trust。")
+        print("私钥留在这台电脑，不要发给任何人。")
     return 0
 
 
@@ -206,7 +213,7 @@ def cmd_trust(home: Home, args) -> int:
         if status == "already":
             print(f"{person} 已有普通写信权限（{ops}），未改政策文件。")
         else:
-            print(f"已授予 {person} 普通写信权限（{ops}）。读文件、列目录、搜索仍默认拒绝，需要时再改政策。")
+            print(f"已授予 {person} 普通写信权限（{ops}，含这些信上的附件）。读文件、列目录、搜索仍默认拒绝，只有本机主人能在政策里打开。")
     return 0
 
 
@@ -356,6 +363,8 @@ def cmd_status(home: Home, args) -> int:
     print(f"{'成员':<16} {'状态':<12} {'地址':<18} {'待发':<6} 最后见到")
     for peer in snap["peers"]:
         print(f"{peer['name']:<16} {label(peer['state']):<12} {(peer['ip'] or '—'):<18} {peer['pending']:<6} {peer['last_seen'] or '—'}")
+        if peer.get("cert_warning"):
+            print(f"  警告：{peer['cert_warning']}")
     if not snap["peers"]:
         print("（名单里还没有其他同事）")
     print()
@@ -399,6 +408,9 @@ def cmd_peers(home: Home, args) -> int:
         found = True
         row = cache.get(agent["name"]) or {}
         print(f"{agent['name']}  {label(row.get('state') or 'offline')}  {row.get('ip') or agent.get('lan_ip') or '—'}  {row.get('last_seen') or '—'}")
+        warning = row.get("cert_warning") or ""
+        if warning:
+            print(f"  警告：{warning}")
     if not found:
         print("名单里还没有其他同事。")
     return 0
@@ -507,7 +519,7 @@ def cmd_policy_grant_trusted(home: Home, args) -> int:
     if not added:
         print(f"名单里的同事都已有普通写信权限（{ops}），未改政策文件。")
         return 0
-    print(f"已为 { '、'.join(added) } 补上普通写信权限（{ops}）。读文件、列目录、搜索仍默认拒绝。")
+    print(f"已为 { '、'.join(added) } 补上普通写信权限（{ops}，含这些信上的附件）。读文件、列目录、搜索仍默认拒绝，只有本机主人能在政策里打开。")
     return 0
 
 
