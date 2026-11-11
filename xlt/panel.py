@@ -206,15 +206,17 @@ CSS = """
   --bg: #ffffff;
   --bg-secondary: #f5f5f5;
   --bg-hover: #f5f5f5;
-  --bg-selected: #e6e6e6;
+  --bg-selected: #e5f4ff;
   --bg-pressed: #e6e6e6;
   --text: #000000e5;
   --text-secondary: #00000080;
   --text-tertiary: #0000004d;
+  --text-meta: #808080;
   --border: #e6e6e6;
   --border-strong: #2c2c2c;
   --brand-ink: #2c2c2c;
   --link: #0768cf;
+  --outline-selected: #328dd5;
   --success-bg: #e0f6e5;
   --success-fg: #008043;
   --warning-bg: #fff1c2;
@@ -225,6 +227,7 @@ CSS = """
   --neutral-fg: #444444;
   --radius-s: 2px;
   --radius-m: 5px;
+  --radius-row: 8px;
   --radius-l: 13px;
   --radius-full: 9999px;
   --space-1: 4px;
@@ -238,6 +241,8 @@ CSS = """
   --weight: 450;
   --weight-strong: 550;
   --shadow-100: 0 1px 3px #00000026, 0 0 0.5px #0000004d;
+  --sidebar: 240px;
+  --topbar: 48px;
 }
 *, *::before, *::after { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; height: 100%; }
@@ -253,9 +258,10 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 a { color: inherit; text-decoration: none; }
-a:focus-visible, button:focus-visible {
-  outline: 2px solid var(--brand-ink);
+a:focus-visible, button:focus-visible, tbody tr:focus-visible {
+  outline: 2px solid var(--outline-selected);
   outline-offset: 2px;
+  border-radius: var(--radius-row);
 }
 .app {
   display: flex;
@@ -263,13 +269,13 @@ a:focus-visible, button:focus-visible {
   align-items: stretch;
 }
 .sidebar {
-  width: 240px;
-  flex: 0 0 240px;
-  background: var(--bg-secondary);
+  width: var(--sidebar);
+  flex: 0 0 var(--sidebar);
+  background: var(--bg);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  padding: var(--space-3) var(--space-2) var(--space-3);
+  padding: 0 var(--space-2) var(--space-3);
   position: sticky;
   top: 0;
   height: 100vh;
@@ -279,7 +285,9 @@ a:focus-visible, button:focus-visible {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-1) var(--space-2) var(--space-3);
+  height: var(--topbar);
+  padding: 0 4px;
+  flex: 0 0 var(--topbar);
 }
 .mark {
   width: 24px;
@@ -301,35 +309,43 @@ a:focus-visible, button:focus-visible {
   font-weight: var(--weight-strong);
   line-height: 16px;
 }
-.who {
-  padding: var(--space-1) var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border);
-  margin-bottom: var(--space-2);
-}
-.who-name {
-  font-weight: var(--weight-strong);
-  line-height: 16px;
-}
-nav {
+nav.side-nav {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
+  margin-top: var(--space-2);
 }
-nav a {
+nav.side-nav a {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  min-height: 32px;
+  height: 28px;
   padding: 0 var(--space-2);
-  border-radius: var(--radius-m);
+  border-radius: var(--radius-row);
   color: var(--text);
   font-size: 13px;
   line-height: 16px;
 }
-nav a:hover { background: #ececec; }
-nav a.active, nav a:target { background: var(--bg-selected); font-weight: var(--weight-strong); }
-nav .count {
+nav.side-nav a:hover { background: var(--bg-secondary); }
+nav.side-nav a.active,
+.app:not(:has(:target)) nav.side-nav a[href="#peers"],
+.app:has(#peers:target) nav.side-nav a[href="#peers"],
+.app:has(#pending:target) nav.side-nav a[href="#pending"],
+.app:has(#windows:target) nav.side-nav a[href="#windows"],
+.app:has(#inbox:target) nav.side-nav a[href="#inbox"],
+.app:has(#rejects:target) nav.side-nav a[href="#rejects"] {
+  background: var(--bg-selected);
+  font-weight: var(--weight-strong);
+}
+.app:has(#pending:target) nav.side-nav a[href="#peers"],
+.app:has(#windows:target) nav.side-nav a[href="#peers"],
+.app:has(#inbox:target) nav.side-nav a[href="#peers"],
+.app:has(#rejects:target) nav.side-nav a[href="#peers"] {
+  background: transparent;
+  font-weight: var(--weight);
+}
+nav.side-nav .count {
   color: var(--text-secondary);
   font-size: 11px;
   font-weight: var(--weight);
@@ -338,7 +354,6 @@ nav .count {
 .sidebar-foot {
   margin-top: auto;
   padding: var(--space-3) var(--space-2) 0;
-  border-top: 1px solid var(--border);
   font-size: 11px;
   line-height: 16px;
   color: var(--text-secondary);
@@ -350,56 +365,100 @@ nav .count {
 main.workspace {
   flex: 1 1 auto;
   min-width: 0;
-  padding: var(--space-3) var(--space-4) var(--space-5);
+  display: flex;
+  flex-direction: column;
 }
 .page-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  margin-bottom: var(--space-3);
+  height: var(--topbar);
+  padding: 0 var(--space-5);
+  flex: 0 0 var(--topbar);
+  background: var(--bg);
 }
 .page-head h1 {
   margin: 0;
-  font-size: 24px;
-  font-weight: var(--weight-strong);
-  line-height: 32px;
-  letter-spacing: -0.0255rem;
-}
-.page-head .sub {
-  margin: var(--space-1) 0 0;
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 22px;
-}
-.stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-.stat {
-  min-width: 112px;
-  padding: var(--space-2) var(--space-2-5);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-m);
-  background: var(--bg);
-}
-.stat b {
-  display: block;
   font-size: 15px;
   font-weight: var(--weight-strong);
   line-height: 25px;
   letter-spacing: -0.00469rem;
 }
-.stat span {
-  display: block;
+.page-head .sub {
+  margin: 0;
   color: var(--text-secondary);
   font-size: 11px;
   line-height: 16px;
 }
+.page-title { min-width: 0; }
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+.stat {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+}
+.stat b {
+  font-size: 13px;
+  font-weight: var(--weight-strong);
+  line-height: 16px;
+  letter-spacing: 0;
+}
+.stat span {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 16px;
+}
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: var(--space-2) var(--space-5);
+  flex-wrap: wrap;
+}
+.tabs a {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 12px;
+  border-radius: var(--radius-full);
+  font-size: 13px;
+  line-height: 16px;
+  color: var(--text);
+}
+.tabs a:hover { color: var(--text); }
+.workspace:not(:has(:target)) .tabs a[href="#peers"],
+.workspace:has(#peers:target) .tabs a[href="#peers"],
+.workspace:has(#pending:target) .tabs a[href="#pending"],
+.workspace:has(#windows:target) .tabs a[href="#windows"],
+.workspace:has(#inbox:target) .tabs a[href="#inbox"],
+.workspace:has(#rejects:target) .tabs a[href="#rejects"] {
+  background: var(--bg-secondary);
+  font-weight: var(--weight-strong);
+}
+.workspace:has(#pending:target) .tabs a[href="#peers"],
+.workspace:has(#windows:target) .tabs a[href="#peers"],
+.workspace:has(#inbox:target) .tabs a[href="#peers"],
+.workspace:has(#rejects:target) .tabs a[href="#peers"] {
+  background: transparent;
+  font-weight: var(--weight);
+}
+.page-body {
+  padding: 0 var(--space-5) var(--space-5);
+}
 section {
   margin-top: var(--space-4);
 }
+section:first-of-type { margin-top: var(--space-2); }
 section > h2 {
   margin: 0 0 var(--space-2);
   font-size: 13px;
@@ -414,9 +473,6 @@ section .hint {
   line-height: 16px;
 }
 .table-wrap {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-m);
-  overflow: auto;
   background: var(--bg);
 }
 table {
@@ -425,21 +481,28 @@ table {
 }
 th, td {
   text-align: left;
-  vertical-align: top;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+  padding: 0 12px;
+  border-bottom: 0;
 }
 th {
+  height: 32px;
   font-size: 11px;
   font-weight: var(--weight-strong);
   line-height: 16px;
-  color: var(--text-secondary);
+  color: var(--text-meta);
   background: var(--bg);
   white-space: nowrap;
 }
-tr:last-child td { border-bottom: 0; }
-tbody tr:hover td { background: var(--bg-hover); }
-td { font-size: 13px; line-height: 16px; }
+td { height: 48px; font-size: 13px; line-height: 16px; }
+tbody tr { cursor: default; }
+tbody tr:hover td { background: transparent; }
+tbody tr:focus {
+  outline: 2px solid var(--outline-selected);
+  outline-offset: -4px;
+  border-radius: var(--radius-row);
+}
+tbody tr:focus td { background: var(--bg); }
 .muted { color: var(--text-secondary); }
 .tiny {
   color: var(--text-secondary);
@@ -466,7 +529,7 @@ td { font-size: 13px; line-height: 16px; }
   white-space: nowrap;
 }
 .badge.online, .badge.replied, .badge.done, .badge.accepted { background: var(--success-bg); color: var(--success-fg); }
-.badge.offline, .badge.no_reply { background: var(--bg-selected); color: var(--neutral-fg); }
+.badge.offline, .badge.no_reply { background: var(--bg-secondary); color: var(--neutral-fg); }
 .badge.awaiting_manual, .badge.queued, .badge.pending, .badge.delivering, .badge.receiving { background: var(--warning-bg); color: var(--warning-fg); }
 .badge.failed, .badge.egress_blocked, .badge.unreachable, .badge.declined, .badge.expired { background: var(--danger-bg); color: var(--danger-fg); }
 .warn {
@@ -475,8 +538,9 @@ td { font-size: 13px; line-height: 16px; }
   font-size: 11px;
   line-height: 16px;
 }
-tr.warn-row td { background: var(--warning-bg); }
-tr.warn-row:hover td { background: #ffe8a3; }
+tr.warn-row td { background: var(--warning-bg); height: auto; padding: 8px 12px; }
+tr.warn-row:hover td { background: var(--warning-bg); }
+tr.warn-row:focus { outline-color: var(--warning-fg); }
 .foot {
   margin-top: var(--space-4);
   color: var(--text-tertiary);
@@ -492,14 +556,23 @@ tr.warn-row:hover td { background: #ffe8a3; }
     position: static;
     border-right: 0;
     border-bottom: 1px solid var(--border);
+    padding: var(--space-2);
   }
-  nav { flex-direction: row; flex-wrap: wrap; }
+  .brand { height: auto; padding: var(--space-2) 4px; flex: none; }
+  nav.side-nav { flex-direction: row; flex-wrap: wrap; }
   .sidebar-foot { margin-top: var(--space-3); }
-  main.workspace { padding: var(--space-3); }
-  .page-head { flex-direction: column; }
+  .page-head {
+    height: auto;
+    flex-direction: column;
+    align-items: flex-start;
+    padding: var(--space-3) var(--space-3) var(--space-2);
+    flex: none;
+  }
+  .tabs, .page-body { padding-left: var(--space-3); padding-right: var(--space-3); }
   table { min-width: 640px; }
 }
 """
+
 
 
 def _nav_link(anchor: str, title: str, count: str | None = None, active: bool = False) -> str:
@@ -512,7 +585,7 @@ def render(snap: dict) -> str:
     peer_rows = []
     for peer in snap["peers"]:
         peer_rows.append(
-            "<tr>"
+            "<tr tabindex='-1'>"
             f"<td>{_esc(peer['owner'])}<div class='tiny'>{_esc(peer['person'])} · {_esc(peer['name'])}</div></td>"
             f"<td>{_badge(peer['state'])}</td>"
             f"<td>{_esc(peer['ip'] or '—')}</td>"
@@ -523,17 +596,17 @@ def render(snap: dict) -> str:
         )
         if peer.get("cert_warning"):
             peer_rows.append(
-                f"<tr class='warn-row'><td colspan='6' class='warn'>{_esc(peer['cert_warning'])}</td></tr>"
+                f"<tr class='warn-row' tabindex='-1'><td colspan='6' class='warn'>{_esc(peer['cert_warning'])}</td></tr>"
             )
     if not peer_rows:
         peer_rows.append(
-            "<tr><td colspan='6' class='muted'>成员名单里还没有其他同事。开着网关等广播即可，也可以用 xlt trust 把他们的证书加进来。</td></tr>"
+            "<tr tabindex='-1'><td colspan='6' class='muted'>成员名单里还没有其他同事。开着网关等广播即可，也可以用 xlt trust 把他们的证书加进来。</td></tr>"
         )
 
     pend_rows = []
     for item in snap["pending"]:
         pend_rows.append(
-            "<tr>"
+            "<tr tabindex='-1'>"
             f"<td class='mono'>{_esc(item.get('id'))}</td>"
             f"<td>{_esc(item.get('to_member') or item.get('to'))}</td>"
             f"<td>{_esc(item.get('type'))}</td>"
@@ -544,13 +617,13 @@ def render(snap: dict) -> str:
             "</tr>"
         )
     if not pend_rows:
-        pend_rows.append("<tr><td colspan='7' class='muted'>待发箱是空的。</td></tr>")
+        pend_rows.append("<tr tabindex='-1'><td colspan='7' class='muted'>待发箱是空的。</td></tr>")
 
     in_rows = []
     for item in snap["inbox"]:
         state = (item.get("state") or {}).get("status")
         in_rows.append(
-            "<tr>"
+            "<tr tabindex='-1'>"
             f"<td class='mono'>{_esc(item.get('id'))}</td>"
             f"<td>{_esc(item.get('from_person'))}</td>"
             f"<td>{_esc(item.get('type'))}</td>"
@@ -561,12 +634,12 @@ def render(snap: dict) -> str:
             "</tr>"
         )
     if not in_rows:
-        in_rows.append("<tr><td colspan='7' class='muted'>还没有收到信。</td></tr>")
+        in_rows.append("<tr tabindex='-1'><td colspan='7' class='muted'>还没有收到信。</td></tr>")
 
     win_rows = []
     for window in snap["windows"]:
         win_rows.append(
-            "<tr>"
+            "<tr tabindex='-1'>"
             f"<td>{_esc(window['ref'])}</td>"
             f"<td>{_esc(window['delivery'])}</td>"
             f"<td>{_esc(window['liveness'])}</td>"
@@ -577,13 +650,13 @@ def render(snap: dict) -> str:
         )
     if not win_rows:
         win_rows.append(
-            "<tr><td colspan='6' class='muted'>还没有登记收信窗口。xlt register 之后，信才知道交给谁。</td></tr>"
+            "<tr tabindex='-1'><td colspan='6' class='muted'>还没有登记收信窗口。xlt register 之后，信才知道交给谁。</td></tr>"
         )
 
     rej_rows = []
     for item in reversed(snap["rejects"]):
         rej_rows.append(
-            "<tr>"
+            "<tr tabindex='-1'>"
             f"<td class='tiny'>{_esc(item.get('ts'))}</td>"
             f"<td>{_esc(item.get('caller') or item.get('from'))}</td>"
             f"<td>{_esc(item.get('action') or item.get('type'))}</td>"
@@ -591,7 +664,7 @@ def render(snap: dict) -> str:
             "</tr>"
         )
     if not rej_rows:
-        rej_rows.append("<tr><td colspan='4' class='muted'>没有被拒记录。</td></tr>")
+        rej_rows.append("<tr tabindex='-1'><td colspan='4' class='muted'>没有被拒记录。</td></tr>")
 
     online = sum(1 for p in snap["peers"] if p["state"] == "online")
     owner = snap.get("owner") or snap.get("me")
@@ -616,14 +689,10 @@ def render(snap: dict) -> str:
       <div class="mark" aria-hidden="true">灵</div>
       <div class="brand-text">
         <div class="product">小灵通</div>
-        <div class="tiny">通讯员</div>
+        <div class="tiny">{_esc(snap.get('owner'))} · {_esc(snap.get('person'))} · {_esc(snap.get('me'))}</div>
       </div>
     </div>
-    <div class="who">
-      <div class="who-name">{_esc(snap.get('owner'))}</div>
-      <div class="tiny">{_esc(snap.get('person'))} · {_esc(snap.get('me'))}</div>
-    </div>
-    <nav>
+    <nav class="side-nav">
       {_nav_link('peers', '同事', str(online))}
       {_nav_link('pending', '待发箱', str(len(snap['pending'])))}
       {_nav_link('windows', '收信窗口', str(len(snap['windows'])))}
@@ -639,7 +708,7 @@ def render(snap: dict) -> str:
   </aside>
   <main class="workspace">
     <header class="page-head">
-      <div>
+      <div class="page-title">
         <h1>小灵通通讯员</h1>
         <p class="sub">{_esc(snap.get('owner'))} 的这台电脑（{_esc(snap.get('me'))}）· 只显示信封，不显示正文</p>
       </div>
@@ -650,6 +719,14 @@ def render(snap: dict) -> str:
         <div class="stat"><b>{_esc(snap.get('routes_default'))}</b><span>默认窗口</span></div>
       </div>
     </header>
+    <nav class="tabs" aria-label="页面分区">
+      {_nav_link('peers', '同事', None)}
+      {_nav_link('pending', '待发箱', None)}
+      {_nav_link('windows', '收信窗口', None)}
+      {_nav_link('inbox', '收到的信', None)}
+      {_nav_link('rejects', '被拒记录', None)}
+    </nav>
+    <div class="page-body">
     <section id="peers">
       <h2>同事</h2>
       <div class="table-wrap">
@@ -697,6 +774,7 @@ def render(snap: dict) -> str:
       </div>
     </section>
     <p class="foot">TCP {_esc(snap.get('tcp_port'))} · UDP {_esc(snap.get('udp_port'))} · 本页只在这台电脑上（127.0.0.1:{_esc(snap.get('panel_port'))}）。启动于 {_esc(snap.get('started') or '—')}</p>
+    </div>
   </main>
 </div>
 </body>
