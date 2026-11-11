@@ -271,7 +271,7 @@ icacls "$env:USERPROFILE\.xlt\policy.yaml" /inheritance:r /grant:r "$env:USERNAM
 - `--person` 若不写，程序会从机器名去掉末尾的 `-mac` / `-win` 当作人名 id（例如 `haonian-win` → `haonian`）。
 - `--owner` 若不写，就用人名 id。
 - `--primary` 是开关，后面不要跟值。一人多台电脑时，发信认带这个标记的那一台；现在每人一台，也请加上。
-- 可选、一般不必填：`--lan-ip`、`--port`（默认 47800）、`--tailscale-ip`。办公室发现靠 UDP 广播，通常不用填 IP。
+- 可选：`--lan-ip`、`--port`（默认 47800）、`--tailscale-ip`。办公室发现默认靠 UDP 广播，通常不用填 IP。若双方都开着 Clash TUN / Tailscale 而互相发现不了，再补上对方的 `--lan-ip`（必要时加上 `--tailscale-ip`），见附录 B。
 - **没有**「先核指纹再登记」的专用开关。登记后命令会打印从证书算出来的指纹，你必须立刻和对方在群里贴的那一串逐字核对（字母大小写不敏感，冒号要一致）。也可以在 `trust` 之前先算一遍：
 
 ```bash
@@ -490,6 +490,7 @@ launchctl kickstart -k gui/$(id -u)/com.xiaolingtong.gateway
 | 看成员名单 | `"$XLT" peers` |
 | 启动通讯员 | `"$XLT" serve`（办公室不要加 `--bind 127.0.0.1`） |
 | 看本机状态 | `"$XLT" status`；状态页 http://127.0.0.1:47321 |
+| 网络诊断 | `"$XLT" doctor`（选中的网卡、广播地址、检测到的 VPN） |
 | 看窗口 / 路由 | `"$XLT" windows`　`"$XLT" route show` |
 | 登记窗口 | `"$XLT" register --agent <名> --window <窗口> --delivery channel\|extension\|headless\|popup\|webhook …` |
 | 设默认窗口 | `"$XLT" route default <agent>/<窗口>` |
@@ -509,7 +510,8 @@ launchctl kickstart -k gui/$(id -u)/com.xiaolingtong.gateway
 
 | 现象 | 先查什么 |
 |---|---|
-| `xlt peers` 里同事一直「离线」，互相发现不了 | 双方 `xlt serve` 是否在跑；路由器是否开了「AP 隔离 / 设备隔离」；Windows 是否「专用网络」；防火墙是否放行了 **UDP 47801** 和 **TCP 47800**（仅专用、仅本子网）；macOS 是否点了「本地网络 / 传入连接」允许。办公室发现靠 UDP 广播，不是靠填 IP |
+| `xlt peers` 里同事一直「离线」，互相发现不了 | 双方 `xlt serve` 是否在跑；路由器是否开了「AP 隔离 / 设备隔离」；Windows 是否「专用网络」；防火墙是否放行了 **UDP 47801** 和 **TCP 47800**（仅专用、仅本子网）；macOS 是否点了「本地网络 / 传入连接」允许。办公室发现靠 UDP 广播，不是靠填 IP。若本机开着 Clash / Surge TUN 或 Tailscale，先看下一行 |
+| VPN（Clash TUN / 虚拟网卡）下发现不了 | 双方都运行 `"$XLT" doctor`（或 `xlt status` 里的「网络诊断」）。选中的地址必须是办公室网卡上的 `192.168.x` / `10.x`（例如 Wi-Fi `en0`），不能是 `198.18.x`（Clash/Surge Fake-IP）或 `100.x`（Tailscale）。Clash Verge 可以继续开着 TUN，但要保证局域网直出：规则里加上 `IP-CIDR,192.168.0.0/16,DIRECT`（或 `GEOIP,LAN,DIRECT` / 打开 bypass private / 绕过私有地址）；Windows 开 TUN 时把 **strict route / 严格路由** 关掉，否则本机发出的局域网包也会被收走。macOS 防火墙必须允许 **Python 传入连接**。修好规则并重启双方通讯员后再看 `xlt peers`。若广播仍过不去：双方用 `xlt trust … --lan-ip <对方办公室IP>` 登记对方的局域网地址（发现包会单播补发）；再不行，加上 `--tailscale-ip <对方 Tailscale IP>`，通讯员在局域网失败时会走 Tailscale |
 | 发信 `rejected`，`UNKNOWN_PERSON` | 你还没对对方做 `xlt trust`，或 `--to` 写错了人名 id |
 | 发信 `rejected`，`NO_GRANT` / 「没有被授权做这件事」 | 对方的 `policy.yaml` 还没授权你的人名 id 做 `ask` / `notify`（见第 2.3 步）。请对方补授权后再发，或等他改完后你这边待发箱不必重写 |
 | 指纹对不上 / 日志里出现指纹不符 | 证书文件和群里贴的指纹不是同一份，或登记时拿错了文件。停止互发，重新拿到成对的 `.crt` 和指纹，对同一 `--name` 再跑一次 `xlt trust`，核对打印出的指纹全文 |

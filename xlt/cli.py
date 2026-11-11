@@ -109,6 +109,7 @@ def main(argv=None) -> int:
 
     sub.add_parser("windows").set_defaults(func=cmd_windows)
     sub.add_parser("status").set_defaults(func=cmd_status)
+    sub.add_parser("doctor", help="查看选中的网卡、广播地址和 VPN 干扰").set_defaults(func=cmd_doctor)
     sub.add_parser("inbox").set_defaults(func=cmd_inbox)
     sub.add_parser("peers").set_defaults(func=cmd_peers)
     sub.add_parser("outbox").set_defaults(func=cmd_outbox)
@@ -286,10 +287,31 @@ def cmd_windows(home: Home, args) -> int:
     return 0
 
 
+def cmd_doctor(home: Home, args) -> int:
+    from xlt.netinfo import choose_lan, format_doctor, unicast_targets
+    from xlt.store import load_config, load_directory, runtime_path
+
+    cfg = load_config(home)
+    runtime = read_json(runtime_path(home), {})
+    choice = choose_lan()
+    print(format_doctor(choice, cfg, {
+        "listen_ip": runtime.get("listen_ip") or choice.listen_ip,
+        "bind": runtime.get("bind") or cfg.get("bind_ip"),
+        "unicast": unicast_targets(cfg, load_directory(home)),
+    }))
+    if runtime.get("iface") or runtime.get("broadcasts"):
+        used = "、".join(runtime.get("broadcasts") or [])
+        print(f"通讯员启动时：网卡 {runtime.get('iface') or '—'}  广播 {used or '—'}")
+    return 0
+
+
 def cmd_status(home: Home, args) -> int:
     snap = collect(home)
     print(f"本机 {snap.get('owner')}  {snap.get('me')}  人名 {snap.get('person')}")
     print(f"默认窗口 {snap.get('routes_default')}  失效策略 {snap.get('on_window_lost')}")
+    net = snap.get("network") or ""
+    if net:
+        print(net)
     if snap.get("wake_note"):
         print(snap["wake_note"])
     print()

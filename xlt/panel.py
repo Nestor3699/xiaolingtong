@@ -150,11 +150,27 @@ def collect(home: Home) -> dict:
         )
     runtime = read_json(home.root / "runtime.json", {})
     routes = load_routes(home)
+    try:
+        from xlt.netinfo import choose_lan, format_doctor, unicast_targets
+
+        choice = choose_lan()
+        network = format_doctor(
+            choice,
+            cfg,
+            {
+                "listen_ip": runtime.get("listen_ip") or choice.listen_ip,
+                "bind": runtime.get("bind") or cfg.get("bind_ip"),
+                "unicast": unicast_targets(cfg, load_directory(home)),
+            },
+        )
+    except Exception as exc:
+        network = f"网络诊断暂时不可用：{exc}"
     return {
         "me": cfg.get("me"),
         "person": cfg.get("person"),
         "owner": cfg.get("owner"),
         "version": "0.1.0",
+        "network": network,
         "panel_port": runtime.get("panel_port") or cfg.get("panel_port"),
         "tcp_port": runtime.get("tcp_port") or cfg.get("tcp_port"),
         "udp_port": runtime.get("udp_port") or cfg.get("udp_port"),

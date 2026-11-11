@@ -20,18 +20,13 @@ from xlt.engine import Engine, _err
 from xlt.mtls import context, peer_fingerprint, trust_pems
 from xlt.panel import collect, render
 from xlt.power import start as start_power
-from xlt.store import Home, load_config, member_by_fp, save_config
+from xlt.netinfo import choose_lan, detect_lan_ip, format_doctor, is_loopback_ip, is_vpn_ip, unicast_targets
+from xlt.store import Home, load_config, load_directory, member_by_fp, save_config
 
 
 def detect_ip() -> str:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        sock.connect(("192.168.1.1", 1))
-        return sock.getsockname()[0]
-    except OSError:
-        return "127.0.0.1"
-    finally:
-        sock.close()
+    """探测办公室网卡地址。Clash TUN 下不能再用 connect(8.8.8.8) 那一招。"""
+    return detect_lan_ip()
 
 
 def make_logger(home: Home):
@@ -304,14 +299,35 @@ def serve(home: Home, args) -> int:
     if not cfg.get("me") or not (home.tls / f"{cfg['me']}.key").exists():
         print("还没有本机证书。先运行：xlt init --me 你的机器名 --person 你的人名", flush=True)
         return 1
-    if getattr(args, "bind", None):
+    explicit_bind = bool(getattr(args, "bind", None))
+    explicit_ip = bool(getattr(args, "ip", None))
+    if getattr(args, "no_ip_auto", False):
+        cfg["ip_auto"] = False
+    choice = choose_lan()
+    lan_ip = choice.ip
+    corrected = ""
+    if explicit_bind:
         cfg["bind_ip"] = args.bind
-    if getattr(args, "ip", None):
+    elif cfg.get("ip_auto", True) and (not cfg.get("bind_ip") or is_vpn_ip(cfg.get("bind_ip") or "")):
+        if is_vpn_ip(cfg.get("bind_ip") or ""):
+            corrected = cfg["bind_ip"]
+        cfg["bind_ip"] = lan_ip
+    if explicit_ip:
         cfg["announce_ip"] = args.ip
-    elif not cfg.get("announce_ip"):
-        cfg["announce_ip"] = cfg.get("bind_ip") or detect_ip()
+    elif cfg.get("ip_auto", True) and (not cfg.get("announce_ip") or is_vpn_ip(cfg.get("announce_ip") or "")):
+        if is_vpn_ip(cfg.get("announce_ip") or "") and not corrected:
+            corrected = cfg.get("announce_ip") or ""
+        cfg["announce_ip"] = cfg.get("bind_ip") or lan_ip
     if not cfg.get("bind_ip"):
-        cfg["bind_ip"] = cfg.get("announce_ip") or detect_ip()
+        cfg["bind_ip"] = cfg.get("announce_ip") or lan_ip
+    if not cfg.get("announce_ip"):
+        cfg["announce_ip"] = cfg.get("bind_ip") or lan_ip
+    if explicit_bind:
+        listen_ip = args.bind
+    elif is_loopback_ip(cfg["bind_ip"]):
+        listen_ip = cfg["bind_ip"]
+    else:
+        listen_ip = "0.0.0.0"
     if getattr(args, "tcp_port", None):
         cfg["tcp_port"] = args.tcp_port
     if getattr(args, "udp_port", None):
@@ -322,8 +338,6 @@ def serve(home: Home, args) -> int:
         cfg["heartbeat_s"] = args.heartbeat
     if getattr(args, "announce", None):
         cfg["announce_targets"] = list(args.announce)
-    if getattr(args, "no_ip_auto", False):
-        cfg["ip_auto"] = False
     save_config(home, cfg)
 
     runtime = read_json(home.root / "runtime.json", {})
@@ -332,6 +346,12 @@ def serve(home: Home, args) -> int:
         return 1
 
     log = make_logger(home)
+    if corrected:
+        log(f"配置里的地址 {corrected} 像是 VPN，已改用办公室网卡 {lan_ip}")
+    log(format_doctor(choice, cfg, {
+        "listen_ip": listen_ip,
+        "unicast": unicast_targets(cfg, load_directory(home)),
+    }))
     engine = Engine(home, log)
     stop = threading.Event()
     engine.executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="xlt")
@@ -345,9 +365,9 @@ def serve(home: Home, args) -> int:
 
     ctx = context(engine.cert, home.tls / f"{cfg['me']}.key", server=True, trust=trust_pems(home))
     try:
-        peer = PeerServer((cfg["bind_ip"], int(cfg["tcp_port"])), engine, ctx)
+        peer = PeerServer((listen_ip, int(cfg["tcp_port"])), engine, ctx)
     except OSError as exc:
-        print(f"TCP {cfg['bind_ip']}:{cfg['tcp_port']} 绑定失败：{exc}", flush=True)
+        print(f"TCP {listen_ip}:{cfg['tcp_port']} 绑定失败：{exc}", flush=True)
         return 1
     try:
         local = LocalServer(("127.0.0.1", int(cfg["panel_port"])), engine)
@@ -370,12 +390,8 @@ def serve(home: Home, args) -> int:
     # Discovery.announce 是异步的；退出时用同步的一发。
     def _send_now(kind: str, reason: str | None = None):
         packet = disc._build(kind, reason)
-        if packet and disc.sock:
-            for dest in disc._destinations():
-                try:
-                    disc.sock.sendto(packet, dest)
-                except OSError:
-                    pass
+        if packet:
+            disc.send_packet(packet)
             log(f"发出 {kind}")
 
     disc.send_now = _send_now  # type: ignore[attr-defined]
@@ -391,6 +407,10 @@ def serve(home: Home, args) -> int:
             "tcp_port": int(cfg["tcp_port"]),
             "udp_port": int(cfg["udp_port"]),
             "bind": cfg["bind_ip"],
+            "announce_ip": cfg.get("announce_ip") or cfg["bind_ip"],
+            "listen_ip": listen_ip,
+            "iface": choice.iface.name if choice.iface else "",
+            "broadcasts": list(choice.broadcasts),
             "started": now_iso(),
         },
     )
@@ -425,13 +445,18 @@ def serve(home: Home, args) -> int:
                 if gap > 45:
                     log(f"时钟跳变 {int(gap)} 秒，当作刚睡醒，重新广播上线")
                     disc.announce("online", 3)
-                if cfg.get("ip_auto", True):
-                    ip = detect_ip()
-                    if announced_ip and ip != announced_ip:
+                if cfg.get("ip_auto", True) and not explicit_bind and not is_loopback_ip(cfg.get("bind_ip") or ""):
+                    fresh = choose_lan()
+                    ip = fresh.ip
+                    if ip and ip != "127.0.0.1" and not is_vpn_ip(ip) and announced_ip and ip != announced_ip:
                         log(f"IP 变化 {announced_ip} → {ip}，重新广播上线")
                         announced_ip = ip
                         cfg["announce_ip"] = ip
+                        if not explicit_bind:
+                            cfg["bind_ip"] = ip
                         disc.cfg["announce_ip"] = ip
+                        disc.cfg["bind_ip"] = cfg["bind_ip"]
+                        disc.net = fresh
                         save_config(home, cfg)
                         disc.announce("online", 3)
                 last_clock = time.time()

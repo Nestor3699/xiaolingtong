@@ -12,18 +12,18 @@ from pathlib import Path
 
 from xlt.common import now_iso, parse_time
 from xlt.crypto import load_key, sign_obj, verify_obj
-from xlt.store import Home, load_cache, load_config, member_by_name, peer_cert, save_cache
+from xlt.netinfo import bind_udp_to_iface, broadcast_addresses as real_broadcasts, choose_lan, unicast_targets
+from xlt.store import Home, load_cache, load_config, load_directory, member_by_name, peer_cert, save_cache
 
 ONLINE_LIMIT = 10
 SKEW_SECONDS = 120
 
 
 def broadcast_addresses(ip: str) -> list[str]:
-    found = ["255.255.255.255"]
-    parts = (ip or "").split(".")
-    if len(parts) == 4 and not ip.startswith("127."):
-        found.append(".".join(parts[:3] + ["255"]))
-    return found
+    """按网卡真实掩码计算定向广播，并始终附带 255.255.255.255。"""
+    choice = choose_lan()
+    match = next((item for item in choice.all_ifaces if item.ip == ip), choice.iface if choice.iface and choice.iface.ip == ip else None)
+    return real_broadcasts(ip, match, choice.all_ifaces)
 
 
 class Discovery(threading.Thread):
@@ -42,11 +42,20 @@ class Discovery(threading.Thread):
         self.online_times: dict[str, list[float]] = {}
         self.last_reply: dict[str, float] = {}
         self.ready = threading.Event()
+        self.send_sock: socket.socket | None = None
+        self.net = None
 
     def run(self):
         cfg = self.cfg
         bind = cfg.get("bind_ip") or ""
         port = int(cfg["udp_port"])
+        announce = cfg.get("announce_ip") or bind
+        self.net = choose_lan()
+        # 测试绑定 127.0.0.1 时保持原样；办公室则在 0.0.0.0 收包，以便 Tailscale 单播也能进来
+        if bind.startswith("127.") or announce.startswith("127."):
+            listen = bind or "127.0.0.1"
+        else:
+            listen = "0.0.0.0"
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         if hasattr(socket, "SO_REUSEPORT"):
@@ -56,16 +65,19 @@ class Discovery(threading.Thread):
                 pass
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         try:
-            sock.bind((bind, port))
+            sock.bind((listen, port))
         except OSError as exc:
-            self.log(f"UDP {bind or '0.0.0.0'}:{port} 绑定失败：{exc}")
+            self.log(f"UDP {listen}:{port} 绑定失败：{exc}")
             sock.close()
             self.ready.set()
             return
         sock.settimeout(0.5)
         self.sock = sock
+        self.send_sock = self._open_send_sock(announce or bind, sock)
         self.ready.set()
-        self.log(f"发现端口已监听 UDP {bind or '0.0.0.0'}:{port}")
+        dests = ", ".join(f"{h}:{p}" for h, p in self._destinations())
+        ifname = self.net.iface.name if self.net and self.net.iface else "—"
+        self.log(f"发现端口已监听 UDP {listen}:{port}；宣布 {announce or bind}（{ifname}）；发往 {dests}")
         self.announce("online", times=3)
         interval = max(1, int(cfg.get("heartbeat_s") or 180))
         jitter = 20 if interval >= 60 else max(0, interval // 10)
@@ -83,10 +95,13 @@ class Discovery(threading.Thread):
             if time.time() >= next_beat:
                 self.announce("heartbeat", times=1)
                 next_beat = time.time() + interval + random.uniform(-jitter, jitter)
-        try:
-            sock.close()
-        except OSError:
-            pass
+        for item in (self.send_sock, sock):
+            if item is None:
+                continue
+            try:
+                item.close()
+            except OSError:
+                pass
 
     def announce(self, kind: str, times: int = 1, reason: str | None = None):
         threading.Thread(target=self._send_many, args=(kind, times, reason), name="xlt-announce", daemon=True).start()
@@ -96,26 +111,54 @@ class Discovery(threading.Thread):
             if self.stop.is_set() and kind != "offline":
                 return
             packet = self._build(kind, reason)
-            if packet is None or self.sock is None:
+            if packet is None:
                 return
-            for dest in self._destinations():
-                try:
-                    self.sock.sendto(packet, dest)
-                except OSError as exc:
-                    self.log(f"广播发往 {dest[0]}:{dest[1]} 失败：{exc}")
+            self.send_packet(packet)
             self.log(f"发出 {kind} 第 {i + 1}/{times} 次")
             if i + 1 < times:
                 time.sleep(random.uniform(0.3, 1.2))
+
+    def _open_send_sock(self, ip: str, recv_sock: socket.socket) -> socket.socket:
+        if not ip or ip.startswith("127."):
+            return recv_sock
+        send = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        send.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        send.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        ifname = ""
+        if self.net and self.net.iface and self.net.iface.ip == ip:
+            ifname = self.net.iface.name
+        try:
+            send.bind((ip, 0))
+            bind_udp_to_iface(send, ip, ifname)
+            return send
+        except OSError as exc:
+            self.log(f"无法把广播套接字绑到 {ip}（{ifname or '未知网卡'}）：{exc}，改用监听套接字发送")
+            send.close()
+            return recv_sock
+
+    def send_packet(self, packet: bytes, dests: list[tuple[str, int]] | None = None) -> None:
+        sock = self.send_sock or self.sock
+        if sock is None:
+            return
+        for dest in dests or self._destinations():
+            try:
+                sock.sendto(packet, dest)
+            except OSError as exc:
+                self.log(f"广播发往 {dest[0]}:{dest[1]} 失败：{exc}")
 
     def _destinations(self) -> list[tuple[str, int]]:
         cfg = self.cfg
         port = int(cfg["udp_port"])
         ip = cfg.get("announce_ip") or cfg.get("bind_ip") or "127.0.0.1"
-        dests = [(host, port) for host in broadcast_addresses(ip)]
-        for item in cfg.get("announce_targets") or []:
-            host, sep, raw_port = str(item).rpartition(":")
-            if sep and host:
-                dests.append((host, int(raw_port)))
+        if self.net is not None:
+            match = next((item for item in self.net.all_ifaces if item.ip == ip), None)
+            dests = [(host, port) for host in real_broadcasts(ip, match, self.net.all_ifaces)]
+        else:
+            dests = [(host, port) for host in broadcast_addresses(ip)]
+        for item in unicast_targets(cfg, load_directory(self.home)):
+            host, sep, raw = str(item).rpartition(":")
+            if sep and host and raw.isdigit():
+                dests.append((host, int(raw)))
         unique = []
         seen = set()
         for item in dests:
@@ -143,7 +186,7 @@ class Discovery(threading.Thread):
             "host": socket.gethostname(),
             "ip": cfg.get("announce_ip") or cfg.get("bind_ip") or "",
             "port": int(cfg["tcp_port"]),
-            "subnet": _subnet(cfg.get("announce_ip") or cfg.get("bind_ip") or ""),
+            "subnet": _subnet(cfg.get("announce_ip") or cfg.get("bind_ip") or "", self.net),
             "cert_sha256": member_by_name(self.home, me).get("cert_sha256") if member_by_name(self.home, me) else "",
             "agents": _agent_hint(self.home),
             "version": "0.1.0",
@@ -255,12 +298,20 @@ class Discovery(threading.Thread):
         save_cache(self.home, cache)
 
 
-def _subnet(ip: str) -> str:
-    parts = (ip or "").split(".")
-    if len(parts) == 4 and not ip.startswith("127."):
-        return ".".join(parts[:3]) + ".0/24"
-    if ip.startswith("127."):
+def _subnet(ip: str, net=None) -> str:
+    if (ip or "").startswith("127."):
         return "127.0.0.0/8"
+    match = None
+    if net is not None:
+        match = next((item for item in getattr(net, "all_ifaces", []) if item.ip == ip), getattr(net, "iface", None))
+        if match and match.ip != ip:
+            match = None
+    if match:
+        # 网络地址/前缀，例如 192.168.0.0/23
+        from xlt.netinfo import int_to_ip, ip_to_int, prefix_to_netmask
+
+        network = int_to_ip(ip_to_int(match.ip) & prefix_to_netmask(match.prefix))
+        return f"{network}/{match.prefix}"
     return ""
 
 
