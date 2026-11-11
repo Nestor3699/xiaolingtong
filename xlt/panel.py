@@ -201,25 +201,334 @@ def _badge(state: str | None) -> str:
     return f'<span class="badge { _esc(kind) }">{_esc(text)}</span>'
 
 
+CSS = """
+:root {
+  --bg: #ffffff;
+  --bg-secondary: #f5f5f5;
+  --bg-hover: #f5f5f5;
+  --bg-selected: #e6e6e6;
+  --bg-pressed: #e6e6e6;
+  --text: #000000e5;
+  --text-secondary: #00000080;
+  --text-tertiary: #0000004d;
+  --border: #e6e6e6;
+  --border-strong: #2c2c2c;
+  --brand-ink: #2c2c2c;
+  --link: #0768cf;
+  --success-bg: #e0f6e5;
+  --success-fg: #008043;
+  --warning-bg: #fff1c2;
+  --warning-fg: #b86200;
+  --danger-bg: #ffe2e0;
+  --danger-fg: #bd2915;
+  --neutral-bg: #f5f5f5;
+  --neutral-fg: #444444;
+  --radius-s: 2px;
+  --radius-m: 5px;
+  --radius-l: 13px;
+  --radius-full: 9999px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-2-5: 12px;
+  --space-3: 16px;
+  --space-4: 24px;
+  --space-5: 32px;
+  --font: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Roboto", "Helvetica Neue", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Noto Sans", sans-serif;
+  --font-mono: "Roboto Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, "Courier New", monospace;
+  --weight: 450;
+  --weight-strong: 550;
+  --shadow-100: 0 1px 3px #00000026, 0 0 0.5px #0000004d;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; }
+html { color-scheme: light; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: var(--weight);
+  line-height: 22px;
+  letter-spacing: -0.002rem;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; text-decoration: none; }
+a:focus-visible, button:focus-visible {
+  outline: 2px solid var(--brand-ink);
+  outline-offset: 2px;
+}
+.app {
+  display: flex;
+  min-height: 100vh;
+  align-items: stretch;
+}
+.sidebar {
+  width: 240px;
+  flex: 0 0 240px;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-3) var(--space-2) var(--space-3);
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow: auto;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2) var(--space-3);
+}
+.mark {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-m);
+  background: var(--brand-ink);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: var(--weight-strong);
+  letter-spacing: 0;
+  flex: 0 0 24px;
+}
+.brand-text { min-width: 0; }
+.product {
+  font-size: 13px;
+  font-weight: var(--weight-strong);
+  line-height: 16px;
+}
+.who {
+  padding: var(--space-1) var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--space-2);
+}
+.who-name {
+  font-weight: var(--weight-strong);
+  line-height: 16px;
+}
+nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+nav a {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: 32px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-m);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 16px;
+}
+nav a:hover { background: #ececec; }
+nav a.active, nav a:target { background: var(--bg-selected); font-weight: var(--weight-strong); }
+nav .count {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: var(--weight);
+  font-variant-numeric: tabular-nums;
+}
+.sidebar-foot {
+  margin-top: auto;
+  padding: var(--space-3) var(--space-2) 0;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-secondary);
+}
+.sidebar-foot .wake {
+  color: var(--text);
+  margin-bottom: var(--space-2);
+}
+main.workspace {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: var(--space-3) var(--space-4) var(--space-5);
+}
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+.page-head h1 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: var(--weight-strong);
+  line-height: 32px;
+  letter-spacing: -0.0255rem;
+}
+.page-head .sub {
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 22px;
+}
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.stat {
+  min-width: 112px;
+  padding: var(--space-2) var(--space-2-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--bg);
+}
+.stat b {
+  display: block;
+  font-size: 15px;
+  font-weight: var(--weight-strong);
+  line-height: 25px;
+  letter-spacing: -0.00469rem;
+}
+.stat span {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 16px;
+}
+section {
+  margin-top: var(--space-4);
+}
+section > h2 {
+  margin: 0 0 var(--space-2);
+  font-size: 13px;
+  font-weight: var(--weight-strong);
+  line-height: 22px;
+  letter-spacing: -0.002rem;
+}
+section .hint {
+  margin: calc(var(--space-2) * -1) 0 var(--space-2);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 16px;
+}
+.table-wrap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  overflow: auto;
+  background: var(--bg);
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+th, td {
+  text-align: left;
+  vertical-align: top;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+th {
+  font-size: 11px;
+  font-weight: var(--weight-strong);
+  line-height: 16px;
+  color: var(--text-secondary);
+  background: var(--bg);
+  white-space: nowrap;
+}
+tr:last-child td { border-bottom: 0; }
+tbody tr:hover td { background: var(--bg-hover); }
+td { font-size: 13px; line-height: 16px; }
+.muted { color: var(--text-secondary); }
+.tiny {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 16px;
+  margin-top: 2px;
+}
+.mono {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 400;
+  word-break: break-all;
+}
+.badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  background: var(--neutral-bg);
+  color: var(--neutral-fg);
+  font-size: 11px;
+  font-weight: var(--weight-strong);
+  line-height: 16px;
+  white-space: nowrap;
+}
+.badge.online, .badge.replied, .badge.done, .badge.accepted { background: var(--success-bg); color: var(--success-fg); }
+.badge.offline, .badge.no_reply { background: var(--bg-selected); color: var(--neutral-fg); }
+.badge.awaiting_manual, .badge.queued, .badge.pending, .badge.delivering, .badge.receiving { background: var(--warning-bg); color: var(--warning-fg); }
+.badge.failed, .badge.egress_blocked, .badge.unreachable, .badge.declined, .badge.expired { background: var(--danger-bg); color: var(--danger-fg); }
+.warn {
+  background: var(--warning-bg);
+  color: var(--warning-fg);
+  font-size: 11px;
+  line-height: 16px;
+}
+tr.warn-row td { background: var(--warning-bg); }
+tr.warn-row:hover td { background: #ffe8a3; }
+.foot {
+  margin-top: var(--space-4);
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 16px;
+}
+@media (max-width: 860px) {
+  .app { display: block; }
+  .sidebar {
+    width: auto;
+    flex: none;
+    height: auto;
+    position: static;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  nav { flex-direction: row; flex-wrap: wrap; }
+  .sidebar-foot { margin-top: var(--space-3); }
+  main.workspace { padding: var(--space-3); }
+  .page-head { flex-direction: column; }
+  table { min-width: 640px; }
+}
+"""
+
+
+def _nav_link(anchor: str, title: str, count: str | None = None, active: bool = False) -> str:
+    badge = f'<span class="count">{_esc(count)}</span>' if count is not None else ""
+    cls = ' class="active"' if active else ""
+    return f'<a href="#{_esc(anchor)}"{cls}><span>{_esc(title)}</span>{badge}</a>'
+
+
 def render(snap: dict) -> str:
     peer_rows = []
     for peer in snap["peers"]:
         peer_rows.append(
             "<tr>"
-            f"<td>{_esc(peer['owner'])}<div class='muted'>{_esc(peer['person'])} · {_esc(peer['name'])}</div></td>"
+            f"<td>{_esc(peer['owner'])}<div class='tiny'>{_esc(peer['person'])} · {_esc(peer['name'])}</div></td>"
             f"<td>{_badge(peer['state'])}</td>"
             f"<td>{_esc(peer['ip'] or '—')}</td>"
-            f"<td>{_esc(peer['last_seen'] or '—')}</td>"
+            f"<td class='tiny'>{_esc(peer['last_seen'] or '—')}</td>"
             f"<td>{_esc(peer['pending'])}</td>"
-            f"<td>{_esc(peer['source'])}</td>"
+            f"<td class='tiny'>{_esc(peer['source'])}</td>"
             "</tr>"
         )
         if peer.get("cert_warning"):
             peer_rows.append(
-                f"<tr><td colspan='6' class='warn'>{_esc(peer['cert_warning'])}</td></tr>"
-        )
+                f"<tr class='warn-row'><td colspan='6' class='warn'>{_esc(peer['cert_warning'])}</td></tr>"
+            )
     if not peer_rows:
-        peer_rows.append("<tr><td colspan='6' class='muted'>成员名单里还没有其他同事。用 xlt trust 把他们的证书加进来。</td></tr>")
+        peer_rows.append(
+            "<tr><td colspan='6' class='muted'>成员名单里还没有其他同事。开着网关等广播即可，也可以用 xlt trust 把他们的证书加进来。</td></tr>"
+        )
 
     pend_rows = []
     for item in snap["pending"]:
@@ -267,13 +576,15 @@ def render(snap: dict) -> str:
             "</tr>"
         )
     if not win_rows:
-        win_rows.append("<tr><td colspan='6' class='muted'>还没有登记收信窗口。xlt register 之后，信才知道交给谁。</td></tr>")
+        win_rows.append(
+            "<tr><td colspan='6' class='muted'>还没有登记收信窗口。xlt register 之后，信才知道交给谁。</td></tr>"
+        )
 
     rej_rows = []
     for item in reversed(snap["rejects"]):
         rej_rows.append(
             "<tr>"
-            f"<td>{_esc(item.get('ts'))}</td>"
+            f"<td class='tiny'>{_esc(item.get('ts'))}</td>"
             f"<td>{_esc(item.get('caller') or item.get('from'))}</td>"
             f"<td>{_esc(item.get('action') or item.get('type'))}</td>"
             f"<td>{_esc(item.get('reason') or item.get('code'))}</td>"
@@ -282,80 +593,112 @@ def render(snap: dict) -> str:
     if not rej_rows:
         rej_rows.append("<tr><td colspan='4' class='muted'>没有被拒记录。</td></tr>")
 
+    online = sum(1 for p in snap["peers"] if p["state"] == "online")
+    owner = snap.get("owner") or snap.get("me")
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="refresh" content="3">
-<title>小灵通通讯员 · {_esc(snap.get('owner') or snap.get('me'))}</title>
+<title>小灵通通讯员 · {_esc(owner)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;550;600&amp;family=Roboto+Mono:wght@400;500&amp;display=swap">
 <style>
-:root {{ color-scheme: light; }}
-body {{ margin: 0; background: #f4f0e6; color: #1f1a14; font: 15px/1.45 "Noto Sans CJK SC", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif; }}
-main {{ max-width: 1100px; margin: 0 auto; padding: 20px 16px 48px; }}
-h1 {{ font-size: 28px; margin: 0 0 4px; letter-spacing: 0.02em; }}
-h2 {{ font-size: 16px; margin: 28px 0 8px; }}
-.sub {{ color: #5e564b; margin: 0 0 8px; }}
-.note {{ background: #fff; border: 1px solid #e3d9c6; border-radius: 10px; padding: 10px 12px; color: #5e564b; }}
-table {{ width: 100%; border-collapse: collapse; background: #fff; border-radius: 10px; overflow: hidden; }}
-th, td {{ text-align: left; padding: 8px 10px; border-bottom: 1px solid #efe6d6; vertical-align: top; }}
-th {{ font-size: 12px; color: #6d6458; font-weight: 600; background: #faf7f1; }}
-.muted {{ color: #6d6458; }}
-.mono {{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; word-break: break-all; }}
-.badge {{ display: inline-block; padding: 1px 8px; border-radius: 999px; background: #eee6d8; white-space: nowrap; }}
-.badge.online, .badge.replied, .badge.done {{ background: #d9f0e3; color: #14603a; }}
-.badge.offline {{ background: #ece7df; color: #5c564c; }}
-.badge.awaiting_manual, .badge.queued, .badge.pending, .badge.delivering {{ background: #f8e7c3; color: #7a5410; }}
-.badge.failed, .badge.egress_blocked, .badge.unreachable {{ background: #f4d6d2; color: #8a2e26; }}
-.cards {{ display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }}
-.card {{ background: #fff; border-radius: 10px; padding: 10px 12px; min-width: 140px; border: 1px solid #e3d9c6; }}
-.card b {{ display: block; font-size: 18px; }}
-@media (max-width: 720px) {{
-  h1 {{ font-size: 22px; }}
-  table {{ display: block; overflow-x: auto; }}
-  th, td {{ white-space: nowrap; }}
-}}
+{CSS}
 </style>
 </head>
 <body>
-<main>
-  <h1>小灵通通讯员</h1>
-  <p class="sub">{_esc(snap.get('owner'))} 的这台电脑（{_esc(snap.get('me'))}）· 只显示信封，不显示正文</p>
-  <div class="cards">
-    <div class="card"><b>{_esc(snap.get('person'))}</b><span class="muted">人名</span></div>
-    <div class="card"><b>{_esc(len(snap['pending']))}</b><span class="muted">待发</span></div>
-    <div class="card"><b>{_esc(sum(1 for p in snap['peers'] if p['state']=='online'))}</b><span class="muted">同事在线</span></div>
-    <div class="card"><b>{_esc(snap.get('routes_default'))}</b><span class="muted">默认窗口</span></div>
-  </div>
-  <p class="note">{_esc(snap.get('wake_note') or '睡醒检测说明还没写上。')}</p>
-  <h2>同事</h2>
-  <table>
-    <tr><th>谁</th><th>状态</th><th>地址</th><th>最后见到</th><th>待发</th><th>来源</th></tr>
-    {''.join(peer_rows)}
-  </table>
-  <h2>待发箱</h2>
-  <table>
-    <tr><th>消息</th><th>发给</th><th>类型</th><th>标题</th><th>状态</th><th>尝试</th><th>大小</th></tr>
-    {''.join(pend_rows)}
-  </table>
-  <h2>收信窗口</h2>
-  <p class="sub">窗口失效时：{_esc(snap.get('on_window_lost'))}。同名再登记会接管，未送达的信重新排队。</p>
-  <table>
-    <tr><th>窗口</th><th>投递</th><th>状态</th><th>还没处理</th><th>第几次接管</th><th>说明</th></tr>
-    {''.join(win_rows)}
-  </table>
-  <h2>收到的信</h2>
-  <table>
-    <tr><th>消息</th><th>来自</th><th>类型</th><th>标题</th><th>交给</th><th>状态</th><th>大小</th></tr>
-    {''.join(in_rows)}
-  </table>
-  <h2>被拒记录</h2>
-  <table>
-    <tr><th>时间</th><th>谁</th><th>做什么</th><th>原因</th></tr>
-    {''.join(rej_rows)}
-  </table>
-  <p class="muted">TCP {_esc(snap.get('tcp_port'))} · UDP {_esc(snap.get('udp_port'))} · 本页只在这台电脑上（127.0.0.1:{_esc(snap.get('panel_port'))}）。启动于 {_esc(snap.get('started') or '—')}</p>
-</main>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="mark" aria-hidden="true">灵</div>
+      <div class="brand-text">
+        <div class="product">小灵通</div>
+        <div class="tiny">通讯员</div>
+      </div>
+    </div>
+    <div class="who">
+      <div class="who-name">{_esc(snap.get('owner'))}</div>
+      <div class="tiny">{_esc(snap.get('person'))} · {_esc(snap.get('me'))}</div>
+    </div>
+    <nav>
+      {_nav_link('peers', '同事', str(online))}
+      {_nav_link('pending', '待发箱', str(len(snap['pending'])))}
+      {_nav_link('windows', '收信窗口', str(len(snap['windows'])))}
+      {_nav_link('inbox', '收到的信', str(len(snap['inbox'])))}
+      {_nav_link('rejects', '被拒记录', str(len(snap['rejects'])))}
+    </nav>
+    <div class="sidebar-foot">
+      <div class="wake">{_esc(snap.get('wake_note') or '睡醒检测说明还没写上。')}</div>
+      <div>TCP {_esc(snap.get('tcp_port'))} · UDP {_esc(snap.get('udp_port'))}</div>
+      <div>本页只在这台电脑上</div>
+      <div class="mono">127.0.0.1:{_esc(snap.get('panel_port'))}</div>
+    </div>
+  </aside>
+  <main class="workspace">
+    <header class="page-head">
+      <div>
+        <h1>小灵通通讯员</h1>
+        <p class="sub">{_esc(snap.get('owner'))} 的这台电脑（{_esc(snap.get('me'))}）· 只显示信封，不显示正文</p>
+      </div>
+      <div class="stats">
+        <div class="stat"><b>{_esc(snap.get('person'))}</b><span>人名</span></div>
+        <div class="stat"><b>{_esc(len(snap['pending']))}</b><span>待发</span></div>
+        <div class="stat"><b>{_esc(online)}</b><span>同事在线</span></div>
+        <div class="stat"><b>{_esc(snap.get('routes_default'))}</b><span>默认窗口</span></div>
+      </div>
+    </header>
+    <section id="peers">
+      <h2>同事</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>谁</th><th>状态</th><th>地址</th><th>最后见到</th><th>待发</th><th>来源</th></tr></thead>
+          <tbody>{''.join(peer_rows)}</tbody>
+        </table>
+      </div>
+    </section>
+    <section id="pending">
+      <h2>待发箱</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>消息</th><th>发给</th><th>类型</th><th>标题</th><th>状态</th><th>尝试</th><th>大小</th></tr></thead>
+          <tbody>{''.join(pend_rows)}</tbody>
+        </table>
+      </div>
+    </section>
+    <section id="windows">
+      <h2>收信窗口</h2>
+      <p class="hint">窗口失效时：{_esc(snap.get('on_window_lost'))}。同名再登记会接管，未送达的信重新排队。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>窗口</th><th>投递</th><th>状态</th><th>还没处理</th><th>第几次接管</th><th>说明</th></tr></thead>
+          <tbody>{''.join(win_rows)}</tbody>
+        </table>
+      </div>
+    </section>
+    <section id="inbox">
+      <h2>收到的信</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>消息</th><th>来自</th><th>类型</th><th>标题</th><th>交给</th><th>状态</th><th>大小</th></tr></thead>
+          <tbody>{''.join(in_rows)}</tbody>
+        </table>
+      </div>
+    </section>
+    <section id="rejects">
+      <h2>被拒记录</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>时间</th><th>谁</th><th>做什么</th><th>原因</th></tr></thead>
+          <tbody>{''.join(rej_rows)}</tbody>
+        </table>
+      </div>
+    </section>
+    <p class="foot">TCP {_esc(snap.get('tcp_port'))} · UDP {_esc(snap.get('udp_port'))} · 本页只在这台电脑上（127.0.0.1:{_esc(snap.get('panel_port'))}）。启动于 {_esc(snap.get('started') or '—')}</p>
+  </main>
+</div>
 </body>
 </html>
 """

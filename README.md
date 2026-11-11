@@ -122,7 +122,7 @@ launchctl kickstart -k gui/$(id -u)/com.xiaolingtong.gateway
 
 ## 状态页上看什么
 
-在线的同事、待发箱、每个窗口、每封信的状态（排队、处理中、已回复、待手动处理、被拒）。只显示信封：谁、何时、编号、标题、大小。不显示正文。
+在线的同事、待发箱、每个窗口、每封信的状态（排队、处理中、已回复、待手动处理、被拒）。只显示信封：谁、何时、编号、标题、大小。不显示正文。页面是左边栏加紧凑列表的浅色布局；颜色和间距写在 [docs/ui-rules.md](docs/ui-rules.md)。
 
 ## 重跑验收
 
@@ -132,6 +132,8 @@ launchctl kickstart -k gui/$(id -u)/com.xiaolingtong.gateway
 python3 -m venv .venv
 .venv/bin/pip install -e .
 .venv/bin/python e2e/run_e2e.py
+# 只检查状态页文案和“不显示正文”：
+.venv/bin/python e2e/panel_render_e2e.py
 ```
 
 结果在 `e2e/last-report.md`，当时的通讯员日志在 `e2e/saved-logs/`。测试里心跳改成了 3 秒，安装后的默认是 3 分钟。
