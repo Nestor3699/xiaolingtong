@@ -4,7 +4,7 @@
 
 人只写收信人的名字（`nes` / `leo` / `runda` / `haonian` / `mario`）。交给对方哪个 AI，由对方自己的规则决定。
 
-**给同事电脑上的 AI：** 请先读 [DEPLOY-AGENT.md](DEPLOY-AGENT.md)，按那份说明逐步安装和登记窗口，不要改命令开关。人自己看这份 README 即可。
+**给同事电脑上的 AI：** 请先读 [DEPLOY-AGENT.md](DEPLOY-AGENT.md)，按那份说明从上到下逐步安装，不要改命令、不要发明开关。证书文件和 SHA-256 指纹必须成对交给对方，双方都要执行 `xlt trust`，缺一边就发不成信。人自己看这份 README 即可。
 
 公开仓库：<https://github.com/Nestor3699/xiaolingtong>
 
