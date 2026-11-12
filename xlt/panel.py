@@ -14,7 +14,7 @@ LABELS = {
     "offline": "离线",
     "unreachable": "在线但连不上",
     "queued": "排队",
-    "pending": "待发",
+    "pending": "待送达",
     "delivered": "处理中",
     "replied": "已回复",
     "declined": "已拒答",
@@ -43,6 +43,16 @@ def _load_env(path: Path) -> dict | None:
         return None
 
 
+def _clock(epoch) -> str:
+    """下次重试的钟点。写绝对时间，页面每 5 秒刷新时内容才不会天天在变。"""
+    try:
+        import time as _time
+
+        return _time.strftime("%H:%M:%S", _time.localtime(float(epoch)))
+    except (TypeError, ValueError, OverflowError, OSError):
+        return ""
+
+
 def _pending_rows(home: Home) -> list[dict]:
     rows = []
     root = home.pending
@@ -59,6 +69,7 @@ def _pending_rows(home: Home) -> list[dict]:
         item["to_member"] = env.get("to_member")
         item["attempts"] = env.get("attempts") or 0
         item["last_error"] = env.get("last_error")
+        item["next_try_at"] = env.get("next_try_at")
         rows.append(item)
     return rows
 
@@ -589,6 +600,18 @@ def _nav_link(anchor: str, title: str, count: str | None = None, active: bool = 
     return f'<a href="#{_esc(anchor)}"{cls}><span>{_esc(title)}</span>{badge}</a>'
 
 
+def _retry_note(item: dict) -> str:
+    bits = []
+    if item.get("last_error"):
+        bits.append(_esc(item["last_error"]))
+    when = _clock(item.get("next_try_at")) if item.get("next_try_at") else ""
+    if when:
+        bits.append(f"{when} 再试")
+    if not bits:
+        return ""
+    return "<div class='tiny'>" + " · ".join(bits) + "</div>"
+
+
 def _tr(key: str, css: str = "") -> str:
     cls = f" class='{css}'" if css else ""
     return f"<tr{cls} tabindex='-1' data-row='{_esc(key)}'>"
@@ -721,13 +744,14 @@ def render(snap: dict) -> str:
             f"<td>{_esc(item.get('to_member') or item.get('to'))}</td>"
             f"<td>{_esc(item.get('type'))}</td>"
             f"<td>{_esc(item.get('subject') or '—')}</td>"
-            f"<td>{_badge((item.get('state') or {}).get('status') or 'pending')}</td>"
+            f"<td>{_badge((item.get('state') or {}).get('status') or 'pending')}"
+            f"{_retry_note(item)}</td>"
             f"<td>{_esc(item.get('attempts'))}</td>"
             f"<td>{_esc(item.get('letter_bytes'))} 字节</td>"
             "</tr>"
         )
     if not pend_rows:
-        pend_rows.append(f"{_tr('empty-pending')}<td colspan='7' class='muted'>待发箱是空的。</td></tr>")
+        pend_rows.append(f"{_tr('empty-pending')}<td colspan='7' class='muted'>没有待送达的信。</td></tr>")
 
     in_rows = []
     for item in snap["inbox"]:
@@ -803,7 +827,7 @@ def render(snap: dict) -> str:
     </div>
     <nav class="side-nav">
       {_nav_link('peers', '同事', str(online))}
-      {_nav_link('pending', '待发箱', str(len(snap['pending'])))}
+      {_nav_link('pending', '待送达', str(len(snap['pending'])))}
       {_nav_link('windows', '收信窗口', str(len(snap['windows'])))}
       {_nav_link('inbox', '收到的信', str(len(snap['inbox'])))}
       {_nav_link('rejects', '被拒记录', str(len(snap['rejects'])))}
@@ -823,14 +847,14 @@ def render(snap: dict) -> str:
       </div>
       <div class="stats">
         <div class="stat"><b>{_esc(snap.get('person'))}</b><span>人名</span></div>
-        <div class="stat"><b>{_esc(len(snap['pending']))}</b><span>待发</span></div>
+        <div class="stat"><b>{_esc(len(snap['pending']))}</b><span>待送达</span></div>
         <div class="stat"><b>{_esc(online)}</b><span>同事在线</span></div>
         <div class="stat"><b>{_esc(snap.get('routes_default'))}</b><span>默认窗口</span></div>
       </div>
     </header>
     <nav class="tabs" aria-label="页面分区">
       {_nav_link('peers', '同事', None)}
-      {_nav_link('pending', '待发箱', None)}
+      {_nav_link('pending', '待送达', None)}
       {_nav_link('windows', '收信窗口', None)}
       {_nav_link('inbox', '收到的信', None)}
       {_nav_link('rejects', '被拒记录', None)}
@@ -846,10 +870,11 @@ def render(snap: dict) -> str:
       </div>
     </section>
     <section id="pending">
-      <h2>待发箱</h2>
+      <h2>待送达</h2>
+      <p class="hint">对方离线或网关没开时，信先存在这里，对方一上线就自动补发，不用重发。</p>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>消息</th><th>发给</th><th>类型</th><th>标题</th><th>状态</th><th>尝试</th><th>大小</th></tr></thead>
+          <thead><tr><th>消息</th><th>发给</th><th>类型</th><th>标题</th><th>状态</th><th>已试</th><th>大小</th></tr></thead>
           <tbody>{''.join(pend_rows)}</tbody>
         </table>
       </div>

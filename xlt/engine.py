@@ -53,7 +53,9 @@ from xlt.store import (
     resolve_person,
 )
 
-BACKOFF = (10, 30, 120, 300)
+BACKOFF = tuple(
+    int(item) for item in (os.environ.get("XLT_BACKOFF") or "10,30,120,300").split(",") if item.strip()
+) or (10, 30, 120, 300)
 NO_RETRY = {400, 401, 403, 404, 410, 413}
 
 
@@ -797,10 +799,9 @@ class Engine:
         env["attempts"] = attempts
         env["last_error"] = error
         env["last_attempt"] = now_iso()
-        if attempts <= len(BACKOFF):
-            env["next_try_at"] = time.time() + BACKOFF[attempts - 1]
-        else:
-            env["next_try_at"] = None
+        # 退避：10 秒、30 秒、2 分钟、5 分钟，之后一直每 5 分钟试一次，直到信过期。
+        # 对方一发上线广播，flush_member 会不管退避时间立刻补发。
+        env["next_try_at"] = time.time() + BACKOFF[min(attempts, len(BACKOFF)) - 1]
         env.setdefault("state", {})["status"] = "pending"
         env["state"]["updated"] = now_iso()
         write_json(env_path, env)

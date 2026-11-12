@@ -103,7 +103,7 @@ def main() -> int:
         "小灵通通讯员",
         "只显示信封，不显示正文",
         "同事",
-        "待发箱",
+        "待送达",
         "收信窗口",
         "收到的信",
         "被拒记录",
@@ -151,7 +151,7 @@ def main() -> int:
             "rejects": [],
         }
     )
-    for item in ("成员名单里还没有其他同事", "待发箱是空的", "还没有收到信", "还没有登记收信窗口", "没有被拒记录", "睡醒检测说明还没写上。"):
+    for item in ("成员名单里还没有其他同事", "没有待送达的信", "还没有收到信", "还没有登记收信窗口", "没有被拒记录", "睡醒检测说明还没写上。"):
         if item not in empty:
             fail(f"空状态缺少：「{item}」")
     print("ok: panel render keeps labels, layout, and hides letter bodies")

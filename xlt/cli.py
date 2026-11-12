@@ -418,10 +418,16 @@ def cmd_peers(home: Home, args) -> int:
 
 def cmd_outbox(home: Home, args) -> int:
     rows = collect(home)["pending"]
-    print(f"待发 {len(rows)} 封")
+    print(f"待送达 {len(rows)} 封（对方上线会自动补发）")
     for item in rows:
         extra = f"  {item['attach_progress']}" if item.get("attach_progress") else ""
-        print(f"{item.get('id')}  → {item.get('to_member')}  尝试 {item.get('attempts')}  {item.get('subject') or '—'}{extra}")
+        retry = ""
+        if item.get("next_try_at"):
+            import time as _time
+
+            retry = f"  下次重试 {_time.strftime('%H:%M:%S', _time.localtime(float(item['next_try_at'])))}"
+        why = f"  最近原因：{item['last_error']}" if item.get("last_error") else ""
+        print(f"{item.get('id')}  → {item.get('to_member')}  已试 {item.get('attempts')} 次  {item.get('subject') or '—'}{extra}{retry}{why}")
     return 0
 
 
