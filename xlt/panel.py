@@ -6,9 +6,10 @@ import html
 import json
 from pathlib import Path
 
-from xlt import certevents, receipts
+from xlt import certevents, receipts, updater
 from xlt.icons import icon
 from xlt.common import envelope_summary, read_json
+from xlt import __version__
 from xlt.store import Home, load_cache, load_config, load_directory, load_routes, load_windows
 
 LABELS = {
@@ -232,7 +233,8 @@ def collect(home: Home) -> dict:
         "me": cfg.get("me"),
         "person": cfg.get("person"),
         "owner": cfg.get("owner"),
-        "version": "0.1.0",
+        "version": __version__,
+        "update": _update_view(home),
         "fingerprint": mine.get("cert_sha256") or "",
         "ip": runtime.get("announce_ip") or cfg.get("announce_ip") or cfg.get("bind_ip") or "",
         "gateway_running": pid_alive(runtime.get("pid")),
@@ -258,6 +260,13 @@ def collect(home: Home) -> dict:
         "windows": windows,
         "rejects": _jsonl_tail(home.root / "rejects.jsonl", 12),
     }
+
+
+def _update_view(home: Home) -> dict:
+    info = updater.panel_info(home)
+    info["commit_short"] = updater.short(info["commit"]) if info.get("commit") else ""
+    info["last_check_short"] = _short_time(info.get("last_check")) if info.get("last_check") else ""
+    return info
 
 
 def _esc(value) -> str:
@@ -735,6 +744,11 @@ tr.warn-row:focus { outline-color: var(--warning-fg); }
 .alert-bar b { font-weight: var(--weight-strong); }
 .alert-bar .alert-sub { font-size: 11px; line-height: 16px; margin-top: 2px; color: #7a1c0f; }
 .alert-bar .fp { font-family: var(--font-mono); font-size: 11px; }
+.alert-bar.info { background: var(--success-bg); color: var(--success-fg); border-bottom-color: #b7e3c3; }
+.alert-bar.warn { background: var(--warning-bg); color: var(--warning-fg); border-bottom-color: #f0d68a; }
+.alert-bar.info .alert-sub, .alert-bar.warn .alert-sub { color: inherit; opacity: 0.8; }
+.alert-bar.info button { border-color: #9fd3ae; color: var(--success-fg); }
+.alert-bar.warn button { border-color: #e6c56a; color: var(--warning-fg); }
 .alert-bar button {
   flex: 0 0 auto;
   height: 28px;
@@ -946,7 +960,7 @@ LIVE_JS = """(function () {
     var btn = ev.target && ev.target.closest ? ev.target.closest("[data-dismiss]") : null;
     if (!btn) return;
     btn.disabled = true;
-    fetch("/local/cert-dismiss", {
+    fetch(btn.getAttribute("data-dismiss-url") || "/local/cert-dismiss", {
       method: "POST",
       headers: {"Content-Type": "application/json", "X-Xlt-Panel": "1"},
       body: JSON.stringify({id: btn.getAttribute("data-dismiss")})
@@ -1086,6 +1100,16 @@ def render(snap: dict) -> str:
             f"<div class=\"alert-bar\" role=\"alert\"><div class=\"alert-body\">还有 {extra_alerts} 条证书替换提醒。</div>"
             "<button type=\"button\" data-dismiss=\"all\">全部知道了</button></div>"
         )
+    notice = (snap.get("update") or {}).get("notice")
+    if notice:
+        warn = notice.get("kind") == "rolled_back"
+        alert_bars.insert(0,
+            f"<div class=\"alert-bar {'warn' if warn else 'info'}\" role=\"status\" data-alert=\"{_esc(notice.get('id'))}\">"
+            f"<span class=\"alert-ic\">{icon('triangle-exclamation-point' if warn else 'refresh-cw', 18)}</span>"
+            f"<div class=\"alert-body\"><b>{'更新失败，已退回旧版' if warn else '小灵通已自动更新'}</b> {_esc(notice.get('text'))}"
+            f"<div class=\"alert-sub\">{_esc(_short_time(notice.get('at')))}</div></div>"
+            f"<button type=\"button\" data-dismiss=\"{_esc(notice.get('id'))}\" data-dismiss-url=\"/local/update-dismiss\">知道了</button></div>"
+        )
     alert_html = f'<div class="alert-stack">{"".join(alert_bars)}</div>' if alert_bars else ""
     full_fp = str(snap.get("fingerprint") or "")
     if full_fp:
@@ -1104,6 +1128,19 @@ def render(snap: dict) -> str:
         )
     else:
         gateway_cell = '<span><span class="dot off"></span> 没在运行</span>'
+    upd = snap.get("update") or {}
+    result_text = {
+        "updated": "刚更新成功", "up_to_date": "已是最新", "rolled_back": "更新失败，已退回",
+        "skipped_dirty": "有本地改动，没更新", "skipped_non_ff": "本地提交分叉，没更新",
+        "skipped_branch": "不在 main 分支，没更新", "skipped_bad": "跳过出过问题的版本",
+        "deferred": "在传文件，稍后更新", "error": "检查失败（没网？）", "unsupported": "这份安装不能自动更新",
+    }.get(upd.get("result") or "", "还没检查过")
+    update_cell = (
+        f'<div class="stack"><span>自动更新 {"开" if upd.get("auto", True) else "关"}</span>'
+        f'<span class="sub" title="{_esc(upd.get("message"))}">{_esc(result_text)}'
+        + (f" · {_esc(upd.get('last_check_short'))}" if upd.get("last_check_short") else "")
+        + "</span></div>"
+    )
     online = sum(1 for p in snap["peers"] if p["state"] == "online")
     owner = snap.get("owner") or snap.get("me")
     return f"""<!DOCTYPE html>
@@ -1143,7 +1180,8 @@ def render(snap: dict) -> str:
         <div class="kv-row"><dt>{icon('fingerprint-pattern')}<span>指纹</span></dt><dd>{fp_cell}</dd></div>
         <div class="kv-row"><dt>{icon('activity')}<span>网关</span></dt><dd>{gateway_cell}</dd></div>
         <div class="kv-row"><dt>{icon('plug')}<span>端口</span></dt><dd class="stack mono"><span>TCP {_esc(snap.get('tcp_port'))}</span><span>UDP {_esc(snap.get('udp_port'))}</span></dd></div>
-        <div class="kv-row"><dt>{icon('info')}<span>版本</span></dt><dd>{_esc(snap.get('version') or '—')}</dd></div>
+        <div class="kv-row"><dt>{icon('info')}<span>版本</span></dt><dd><div class="stack"><span>{_esc(snap.get('version') or '—')}{(' · <span class="mono">' + _esc(upd.get('commit_short')) + '</span>') if upd.get('commit_short') else ''}</span></div></dd></div>
+        <div class="kv-row"><dt>{icon('refresh-cw')}<span>更新</span></dt><dd>{update_cell}</dd></div>
       </dl>
       <details class="foot-note">
         <summary>{icon('chevron-right', 14)}<span>睡醒检测</span></summary>

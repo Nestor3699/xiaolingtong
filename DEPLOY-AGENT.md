@@ -385,7 +385,14 @@ launchctl kickstart -k gui/$(id -u)/com.xiaolingtong.gateway
 
 ## 升级已部署的机器（给 agent）
 
-主人说「更新一下」时：`git pull`、在虚拟环境里 `pip install -e .`、重启通讯员（macOS：`launchctl kickstart -k gui/$(id -u)/com.xiaolingtong.gateway`；Windows：`Stop-ScheduledTask` 再 `Start-ScheduledTask` 任务「Xiaolingtong Gateway」；若是手动 `xlt serve` 启动的，停掉再启动）。不要重新 `xlt init`，不要改 `~/.xlt/`。新旧版本能互相收发（新增字段都是可选的，新接口是只读的）；对方没升级时看不到他的「已读」。升级后跑一次 `"$XLT" doctor`，把它的输出原样转述给主人；有一项不通就按它写的修法办。不要打印 `~/.xlt/` 里的密钥。
+**自动更新（这一版起，默认开）：** 通讯员自己每约 30 分钟看一次 GitHub main，有新提交就更新、重启、自检，不行自动退回。主人通常什么都不用做。你要知道的：
+
+- 这一版以前的机器**不会**自己更新，要手动升最后一次：git 副本 `cd ~/xiaolingtong && git pull`，在虚拟环境里 `pip install -e .`，重启通讯员（macOS：`launchctl kickstart -k gui/$(id -u)/com.xiaolingtong.gateway`；Windows：`Stop-ScheduledTask` 再 `Start-ScheduledTask` 任务「Xiaolingtong Gateway」；若是手动 `xlt serve` 启动的，停掉再启动）。非 git 副本：下载 main 的压缩包覆盖代码目录（保留 `.venv`、`grok-test` 等），`pip install -e .`，重启通讯员。不要重新 `xlt init`，不要改 `~/.xlt/`。做完以后都是自动的。
+- 命令：`"$XLT" update --check`（只看）、`"$XLT" update`（现在就更新，会重启并自检）、`"$XLT" config auto_update false`（关）/ `true`（开）。状态页「本机」块里能看到当前版本、提交号和上次检查结果。
+- 它只会 fast-forward。主人改过被跟踪的文件、有自己的提交、不在 main 分支时会跳过并在状态页写明原因，**绝不 reset、不丢主人的改动**。遇到这种情况不要替主人 `git reset --hard` 或强拉；先把 `xlt update` 的原文告诉主人。
+- 自检失败会退回上一版并记下坏提交（`~/.xlt/update-state.json` 的 `failed_commits`）；页面顶上会有黄色提示。同一个坏提交不会再试，等线上有新提交才会再更新。
+- 只改代码目录；`~/.xlt` 里除了 `update-state.json` 和更新时的 `update.lock`，别的一概不碰。不要打印 `~/.xlt/` 里的密钥。
+- 升级后（手动或自动）跑一次 `"$XLT" doctor`，把输出原样转述给主人；有一项不通就按它写的修法办。
 
 ## 附件
 
@@ -411,6 +418,7 @@ launchctl kickstart -k gui/$(id -u)/com.xiaolingtong.gateway
 | 看成员名单 | `"$XLT" peers` |
 | 启动通讯员 | `"$XLT" serve`（办公室不要加 `--bind 127.0.0.1`） |
 | 看本机状态 | `"$XLT" status`；状态页 http://127.0.0.1:47321 |
+| 更新 | `"$XLT" update --check`　`"$XLT" update`　`"$XLT" config auto_update false`（关自动更新） |
 | 自检 | `"$XLT" doctor`（Windows 防火墙、端口 47800/47801/47321、网卡与广播地址、Clash TUN / Tailscale，每一项给出大白话修法；`--json` 给脚本用） |
 | 发出的信状态 | `"$XLT" sent`（待送达 / 已送达 / 已读） |
 | 看窗口 / 路由 | `"$XLT" windows`　`"$XLT" route show` |

@@ -66,6 +66,13 @@ def fixture() -> dict:
         "state": {"status": "replied", "routed_to": "claude/default"}, "folder": "default", "letter_bytes": 310,
         "read": True, "read_at": "2026-11-12T09:02:00+08:00",
     })
+    snap["update"] = {
+        "auto": True, "commit": "e25ea45f1d3c9a7b0c2e4d5f60718293a4b5c6d7", "commit_short": "e25ea45", "version": "0.1.0",
+        "last_check": "2026-11-12T11:30:00+08:00", "last_check_short": "11-12 11:30", "result": "updated",
+        "message": "已更新 9d45baf → e25ea45，通讯员已重启，自检通过。",
+        "notice": {"id": "updated-1", "kind": "updated", "dismissed": False, "at": "2026-11-12T11:30:00+08:00",
+                   "text": "已更新 9d45baf → e25ea45，通讯员已重启，自检通过。"},
+    }
     snap["cert_alerts"] = [{
         "id": "cert-demo", "name": "haonian-win", "owner": "浩年", "ts": "2026-11-12T10:58:00+08:00", "ip": "192.168.0.140",
         "old_fp": FP, "new_fp": FP_NEW, "old_short": "05:1F:C8:58 … CE:11:F2:F7", "new_short": "C6:31:13:80 … 48:BD:F3:21",
@@ -100,8 +107,22 @@ def main() -> int:
         browser.screenshot(OUT / "v2-sidebar.png", clip={"x": 0, "y": 0, "width": 260, "height": 900})
         browser.js("document.querySelector('details.foot-note').open = true; window.scrollTo(0, 0); true")
         browser.screenshot(OUT / "v2-sidebar-open.png", clip={"x": 0, "y": 0, "width": 260, "height": 900})
+        browser.screenshot(OUT / "v3-sidebar.png", clip={"x": 0, "y": 0, "width": 260, "height": 900})
         browser.js("document.querySelector('details.foot-note').open = false; true")
         browser.screenshot(OUT / "v2-banner.png", clip={"x": 240, "y": 0, "width": 1200, "height": 330})
+        STATE["snap"]["cert_alerts"] = []
+        STATE["snap"]["update"].update(
+            result="rolled_back", message="x",
+            notice={"id": "rb-1", "kind": "rolled_back", "dismissed": False, "at": "2026-11-12T11:41:00+08:00",
+                    "text": "更新到 6b7290d 后自检没通过（通讯员进程没有起来（启动就退出了）），已退回 e25ea45 并重启。"})
+        browser.open(url, 1440, 900)
+        browser.screenshot(OUT / "v3-banner-rollback.png", clip={"x": 240, "y": 0, "width": 1200, "height": 120})
+        STATE["snap"]["update"]["notice"] = {"id": "up-1", "kind": "updated", "dismissed": False, "at": "2026-11-12T11:30:00+08:00",
+                                              "text": "已更新 9d45baf → e25ea45，通讯员已重启，自检通过。"}
+        browser.open(url, 1440, 900)
+        browser.screenshot(OUT / "v3-banner-updated.png", clip={"x": 240, "y": 0, "width": 1200, "height": 120})
+        STATE["snap"] = fixture()
+        browser.open(url, 1440, 900)
         browser.js("location.hash = '#pending'; true")
         browser.js("document.querySelector('#pending').scrollIntoView(); true")
         browser.screenshot(OUT / "v2-delivery.png")

@@ -139,7 +139,7 @@ def main() -> int:
     for emoji in ("📬", "✅", "⚠️", "🔔", "❌", "✉️"):
         if emoji in html:
             fail(f"状态页不应使用 emoji：{emoji}")
-    for need in ("本机", "机器名", "主人", "地址", "指纹", "网关", "端口", "版本", 'class="kv-row"'):
+    for need in ("本机", "机器名", "主人", "地址", "指纹", "网关", "端口", "版本", "更新", 'class="kv-row"'):
         if need not in html:
             fail(f"侧栏底部缺少带标签的一行：「{need}」")
     if label("awaiting_manual") != "待手动处理":

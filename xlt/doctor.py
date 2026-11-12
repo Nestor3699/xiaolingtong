@@ -13,6 +13,7 @@ import socket
 import subprocess
 import sys
 import time
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 
@@ -68,9 +69,15 @@ def pid_alive(pid) -> bool:
         return f'"{pid}"' in out
     try:
         os.kill(pid, 0)
-        return True
     except OSError:
         return False
+    try:  # 已经退出、还没被父进程收尸的僵尸进程不算活着（Linux）
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
+        if stat.rsplit(")", 1)[-1].split()[0] == "Z":
+            return False
+    except (OSError, IndexError):
+        pass
+    return True
 
 
 # ------------------------------------------------------------------ 端口

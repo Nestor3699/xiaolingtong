@@ -116,6 +116,16 @@ def main(argv=None) -> int:
     doctor = sub.add_parser("doctor", help="自检：端口、防火墙、VPN/广播、同事能不能看到；每项给出怎么修")
     doctor.add_argument("--json", action="store_true", help="输出 JSON，给脚本用")
     doctor.set_defaults(func=cmd_doctor)
+    upd = sub.add_parser("update", help="检查并更新小灵通到 GitHub main 的最新版（会重启通讯员并自检，不行自动退回）")
+    upd.add_argument("--check", action="store_true", help="只检查有没有新版本，不更新")
+    upd.add_argument("--force", action="store_true", help="通讯员正在收发文件也不等，直接更新")
+    upd.add_argument("--auto", action="store_true", help=argparse.SUPPRESS)
+    upd.add_argument("--resume", action="store_true", help=argparse.SUPPRESS)
+    upd.set_defaults(func=cmd_update)
+    conf = sub.add_parser("config", help="看或改几个开关：auto_update（自动更新）、auto_update_interval_min（检查间隔，分钟）")
+    conf.add_argument("key", nargs="?")
+    conf.add_argument("value", nargs="?")
+    conf.set_defaults(func=cmd_config)
     sub.add_parser("inbox").set_defaults(func=cmd_inbox)
     read = sub.add_parser("read", help="读一封收到的信（打印信纸，并告诉发信人「已读」）")
     read.add_argument("msg_id")
@@ -363,9 +373,79 @@ def cmd_doctor(home: Home, args) -> int:
     return 1 if any(item.status == doctor.FAIL for item in checks) else 0
 
 
+CONFIG_KEYS = {
+    "auto_update": ("开关", "true 或 false。默认 true：通讯员每隔约 30 分钟看一眼 GitHub，有新版本就自己更新并重启。"),
+    "auto_update_interval_min": ("整数", "自动检查更新的间隔，单位分钟，默认 30，最小 5。"),
+}
+
+
+def _parse_bool(text: str):
+    low = text.strip().lower()
+    if low in ("true", "on", "1", "yes", "y", "开", "是"):
+        return True
+    if low in ("false", "off", "0", "no", "n", "关", "否"):
+        return False
+    return None
+
+
+def cmd_config(home: Home, args) -> int:
+    from xlt.store import update_config
+
+    cfg = load_config(home)
+    if not args.key:
+        for key, (_kind, desc) in CONFIG_KEYS.items():
+            print(f"{key} = {json.dumps(cfg.get(key))}    {desc}")
+        return 0
+    if args.key not in CONFIG_KEYS:
+        print(f"这里只能改：{'、'.join(CONFIG_KEYS)}。其他设置请直接改 config.json。")
+        return 2
+    if args.value is None:
+        print(f"{args.key} = {json.dumps(cfg.get(args.key))}")
+        return 0
+    if args.key == "auto_update":
+        value = _parse_bool(args.value)
+        if value is None:
+            print("auto_update 只能是 true 或 false。")
+            return 2
+    else:
+        try:
+            value = max(5, int(args.value))
+        except ValueError:
+            print("需要一个整数（分钟）。")
+            return 2
+    update_config(home, **{args.key: value})
+    extra = "通讯员下次检查时就会按新设置办，不用重启。" if args.key == "auto_update" else ""
+    print(f"已设置 {args.key} = {json.dumps(value)}。{extra}")
+    return 0
+
+
+def cmd_update(home: Home, args) -> int:
+    from xlt import updater
+
+    if args.resume:
+        result = updater.resume_pending(home, say=lambda text: None)
+        return 0 if result["result"] in ("updated", "none", "busy") else 1
+    say = (lambda text: None) if args.auto else print
+    if args.check:
+        info = updater.check_only(home)
+        print(info["message"])
+        return 1 if info["result"] in ("error", "unsupported") else 0
+    result = updater.update(home, auto=args.auto, force=args.force, say=say)
+    if not args.auto:
+        print(result["message"])
+    code = result["result"]
+    if code in ("updated", "up_to_date", "busy", "deferred"):
+        return 0
+    if code in ("skipped_dirty", "skipped_non_ff", "skipped_branch", "skipped_bad"):
+        return 2
+    return 1
+
+
 def cmd_status(home: Home, args) -> int:
     snap = collect(home)
     print(f"本机 {snap.get('owner')}  {snap.get('me')}  人名 {snap.get('person')}")
+    upd = snap.get("update") or {}
+    print(f"版本 {snap.get('version')} {upd.get('commit_short') or ''}  自动更新 {'开' if upd.get('auto') else '关'}  {upd.get('message') or '还没检查过更新'}")
     print(f"默认窗口 {snap.get('routes_default')}  失效策略 {snap.get('on_window_lost')}")
     net = snap.get("network") or ""
     if net:

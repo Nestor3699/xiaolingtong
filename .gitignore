@@ -39,3 +39,7 @@ grok-test/
 ._*
 .idea/
 .vscode/
+
+# self-update artifacts
+.update/
+.xlt-commit

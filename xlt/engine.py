@@ -77,6 +77,7 @@ class Engine:
         self._poll_guard = threading.Lock()
         self.procs: dict[str, subprocess.Popen] = {}
         self.executor = None
+        self.last_rx_chunk = 0.0
         self._load_seen()
 
     def _load_seen(self) -> None:
@@ -1085,6 +1086,16 @@ class Engine:
         if changed:
             save_cache(self.home, cache)
 
+    def busy_info(self) -> dict:
+        """自动更新要不要先等一等：正在发信（含附件），或最近 10 秒内还在收附件块。"""
+        with self.flight:
+            sending = len(self.inflight)
+        receiving = (time.time() - self.last_rx_chunk) < 10
+        from xlt import updater
+
+        return {"busy": bool(sending or receiving), "sending": sending, "receiving": receiving,
+                "commit": updater.running_commit()}
+
     def _att_lock(self, msg_id: str) -> threading.Lock:
         with self.attach_locks_mu:
             return self.attach_locks.setdefault(msg_id, threading.Lock())
@@ -1220,6 +1231,7 @@ class Engine:
             return 400, _err("BAD_ENVELOPE", "这一块附件太大或长度无效", req_id)
         if offset < 0:
             return 400, _err("BAD_ENVELOPE", "偏移无效", req_id)
+        self.last_rx_chunk = time.time()
         with self._att_lock(msg_id):
             with self.home.lock():
                 found = self._find_env(msg_id)

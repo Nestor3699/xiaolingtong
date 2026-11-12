@@ -6,6 +6,7 @@ import json
 import logging
 import socket
 import ssl
+import sys
 import threading
 import time
 import traceback
@@ -14,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from xlt import updater
 from xlt.common import now_iso, read_json, write_json
 from xlt.discovery import Discovery, maybe_mdns
 from xlt.engine import Engine, _err
@@ -21,7 +23,7 @@ from xlt.mtls import context, peer_fingerprint, trust_pems
 from xlt.panel import collect, render
 from xlt.power import start as start_power
 from xlt.netinfo import choose_lan, detect_lan_ip, format_doctor, is_loopback_ip, is_vpn_ip, unicast_targets
-from xlt.store import Home, load_config, load_directory, member_by_fp, save_config
+from xlt.store import Home, load_config, load_directory, member_by_fp, save_config, update_config
 
 
 def detect_ip() -> str:
@@ -284,6 +286,9 @@ class LocalHandler(BaseHTTPRequestHandler):
         if path in ("/api/panel", "/local/status"):
             self._send(200, collect(engine.home))
             return
+        if path == "/local/busy":
+            self._send(200, engine.busy_info())
+            return
         self._send(404, {"error": {"code": "NOT_FOUND", "message": "没有这个地址"}})
 
     def do_POST(self):
@@ -320,6 +325,23 @@ class LocalHandler(BaseHTTPRequestHandler):
                 count = certevents.dismiss(engine.home, str(data.get("id") or ""))
                 self._send(200, {"status": "ok", "dismissed": count})
                 return
+            if path == "/local/update-dismiss":
+                if not self._panel_guard():
+                    return
+                from xlt import updater
+
+                self._send(200, {"status": "ok", "dismissed": updater.dismiss_notice(engine.home, str(data.get("id") or ""))})
+                return
+            if path == "/local/shutdown":
+                # 自动更新要重启通讯员：先请它自己体面地退出（会发下线广播），不行再强杀。
+                if not self._panel_guard():
+                    return
+                engine.log("收到本机的退出请求（更新或手动重启）")
+                self._send(200, {"status": "ok"})
+                stop_event = getattr(engine, "stop_event", None)
+                if stop_event is not None:
+                    stop_event.set()
+                return
             if path == "/local/done":
                 self._send(200, engine.local_done(data.get("msg_id") or ""))
                 return
@@ -342,15 +364,10 @@ def _tail(path, limit: int = 20) -> list:
 
 
 def _pid_alive(pid) -> bool:
-    if not pid:
-        return False
-    try:
-        import os
+    # Windows 上 os.kill(pid, 0) 会给对方发 Ctrl+C，所以统一走 doctor 里按平台区分的版本。
+    from xlt.doctor import pid_alive
 
-        os.kill(int(pid), 0)
-        return True
-    except OSError:
-        return False
+    return pid_alive(pid)
 
 
 def serve(home: Home, args) -> int:
@@ -414,6 +431,7 @@ def serve(home: Home, args) -> int:
     }))
     engine = Engine(home, log)
     stop = threading.Event()
+    engine.stop_event = stop
     engine.executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="xlt")
     discovery_holder: dict = {}
     note = start_power(
@@ -475,6 +493,8 @@ def serve(home: Home, args) -> int:
             "iface": choice.iface.name if choice.iface else "",
             "broadcasts": list(choice.broadcasts),
             "started": now_iso(),
+            "commit": updater.running_commit(),
+            "cmd": updater.restart_command(home, sys.argv[1:]),
         },
     )
     threading.Thread(target=peer.serve_forever, kwargs={"poll_interval": 0.3}, name="xlt-tls", daemon=True).start()
@@ -493,6 +513,7 @@ def serve(home: Home, args) -> int:
 
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
+    scheduler = updater.Scheduler(home, log)
     last_house = 0.0
     last_clock = time.time()
     announced_ip = cfg.get("announce_ip")
@@ -500,6 +521,10 @@ def serve(home: Home, args) -> int:
         while not stop.is_set():
             engine.drain_outbox()
             now_s = time.time()
+            try:
+                scheduler.tick(now_s)
+            except Exception as exc:
+                log(f"更新调度出错（已忽略）：{exc.__class__.__name__}: {exc}")
             if now_s - last_house >= 2:
                 engine.housekeeping()
                 last_house = now_s
@@ -520,7 +545,7 @@ def serve(home: Home, args) -> int:
                         disc.cfg["announce_ip"] = ip
                         disc.cfg["bind_ip"] = cfg["bind_ip"]
                         disc.net = fresh
-                        save_config(home, cfg)
+                        update_config(home, bind_ip=cfg["bind_ip"], announce_ip=cfg["announce_ip"])
                         disc.announce("online", 3)
                 last_clock = time.time()
             stop.wait(0.3)

@@ -123,6 +123,8 @@ def default_config(me: str, person: str, owner: str) -> dict:
         "ip_auto": True,
         "mdns": False,
         "auto_trust": True,
+        "auto_update": True,
+        "auto_update_interval_min": 30,
     }
 
 
@@ -135,6 +137,15 @@ def load_config(home: Home) -> dict:
 
 def save_config(home: Home, cfg: dict) -> None:
     write_json(config_path(home), cfg)
+
+
+def update_config(home: Home, **changes) -> dict:
+    """只改指定的几项，别的照磁盘上现有的写回去。
+    通讯员运行时手里那份配置可能是旧的，整份写回会把别处刚改的项（比如 auto_update）盖掉。"""
+    cfg = load_config(home)
+    cfg.update(changes)
+    save_config(home, cfg)
+    return cfg
 
 
 def person_from_machine(name: str) -> str:

@@ -150,16 +150,49 @@ python3 -m venv .venv
 .venv/bin/python e2e/panel_screens.py
 ```
 
-新增的几个端到端脚本：`outbox_e2e.py`（重启后继续重试）、`receipts_e2e.py`（已送达/已读，含旧版对方）、`doctor_e2e.py`、`cert_banner_e2e.py`（证书提示条）、`resume_e2e.py`（附件中断续传）。
+结果在 `e2e/last-report.md`（`run_all.py` 的是 `e2e/full-report.md`），当时的通讯员日志在 `e2e/saved-logs/`。测试里心跳改成了 3 秒，安装后的默认是 3 分钟。
+
+新增的几个端到端脚本：`outbox_e2e.py`（重启后继续重试）、`receipts_e2e.py`（已送达/已读，含旧版对方）、`doctor_e2e.py`、`cert_banner_e2e.py`（证书提示条）、`resume_e2e.py`（附件中断续传）、`update_e2e.py`（自动更新，全程用本地的 git 仓库和本地 http 服务当 GitHub）。
+
+## 自动更新（默认开）
+
+通讯员启动后约 1 分钟查一次，之后每 30 分钟左右（随机错开）查一次 <https://github.com/Nestor3699/xiaolingtong> 的 main：有比本机新的提交就自己更新，不用点任何东西。**推到 main 的东西会在半小时内到达所有开着自动更新的电脑，所以 main 上只放你愿意让大家立刻用上的东西。**
+
+它怎么做：
+
+1. **git 副本**（`~/xiaolingtong` 是 git 仓库）：`git fetch` 之后只做 fast-forward。你改过被跟踪的文件、不在 main 分支、或你有自己的提交（和线上分叉），就**跳过并告诉你**，绝不 reset、不丢你的东西。
+2. **非 git 副本**（下载的压缩包解开的）：下载新版压缩包，把代码目录换成新版，旧版整份留在 `.update/prev/`；`.venv`、`grok-test` 等你自己的目录原样不动。
+3. 换完在原来的虚拟环境里 `pip install -e .`，重启通讯员，然后**自检**：通讯员起来了、状态页能打开、跑的就是新提交、`xlt doctor` 能跑。自检不过就**退回上一个版本**并重启，把这个坏提交记下来，同一个提交不会再试。
+4. 通讯员正在发或收文件时，先等它忙完（最多等 10 分钟；还忙就这次先推迟，过几分钟再试；连续推迟很多次才直接更新，附件会续传）。待送达的信存在磁盘上，重启不会丢。
+5. 只改代码目录。`~/.xlt` 里的证书、密钥、成员名单、配置一律不碰；更新只多写 `~/.xlt/update-state.json`（检查结果和提示）和更新进行时的 `update.lock`。
+6. 页面侧栏「本机」块会显示当前版本和提交号、自动更新开没开、上次检查的结果；更新成功或退回后，顶部有一条可以点「知道了」收起的提示。
+
+命令：
+
+```bash
+xlt update --check             # 只看有没有新版本，不动任何东西
+xlt update                     # 现在就更新（会重启通讯员并自检；--force 表示正在传文件也不等）
+xlt config auto_update false   # 关掉自动更新（true 再打开；不用重启通讯员）
+xlt config auto_update_interval_min 60   # 检查间隔（分钟，最小 5）
+xlt config                     # 看这两个开关现在的值
+```
+
+macOS 开机自启（launchd）和 Windows 计划任务启动的通讯员，重启时优先交还给系统：macOS 退出后由 launchd 的 KeepAlive 拉起（拉不起就 `launchctl kickstart`），Windows 用 `schtasks /Run`；其他方式启动的（比如手动 `xlt serve`），由更新程序按原来的命令行重新启动。
+
+**不是 `pip install -e .` 装的副本不会自动更新**（比如装进了 site-packages）；`xlt update` 会说明原因。
 
 ## 从旧版升级
 
-在每台电脑上：`git pull`，在虚拟环境里 `pip install -e .`，然后重启通讯员（网关）。不需要重新 `xlt init`，不需要改配置，也不需要同事同时升级：新增的东西对旧版都是可有可无的字段或只读接口，新旧版本可以互相收发。区别只是：对方没升级时，你看不到他那边的「已读」。
+**要先手动升一次，之后才会自动。** 这一版之前的版本不会自己更新，所以每台电脑要手动做这最后一次（做完以后的所有版本都是自动的）：
 
-结果在 `e2e/last-report.md`，当时的通讯员日志在 `e2e/saved-logs/`。测试里心跳改成了 3 秒，安装后的默认是 3 分钟。
+- git 副本（`~/xiaolingtong` 是 git 仓库）：`cd ~/xiaolingtong && git pull`，在虚拟环境里 `pip install -e .`，重启通讯员（macOS：`launchctl kickstart -k gui/$(id -u)/com.xiaolingtong.gateway`；Windows：在 PowerShell 里 `Stop-ScheduledTask -TaskName "Xiaolingtong Gateway"; Start-ScheduledTask -TaskName "Xiaolingtong Gateway"`；手动 `xlt serve` 的就停掉再启动）。
+- 非 git 副本：下载 <https://github.com/Nestor3699/xiaolingtong/archive/refs/heads/main.tar.gz>（或 zip），把里面的内容覆盖到代码目录（保留 `.venv`、`grok-test` 这些你自己的目录），再 `pip install -e .`，重启通讯员。这种副本第一次自动检查时可能会再更新一次（因为它还不知道自己是哪个提交），之后就记住了。
+
+之后不用再做任何事。不需要重新 `xlt init`，不需要改配置，也不需要同事同时升级：新增的东西对旧版都是可有可无的字段或只读接口，新旧版本可以互相收发。区别只是：对方没升级时，你看不到他那边的「已读」。
 
 ## 这一版还没在真办公室验证的
 
+- 自动更新在真 Mac（launchd）和真 Windows（计划任务）上的重启：测试里只覆盖了「更新程序按原命令行重新启动」这一条路；`launchctl kickstart` / `schtasks /Run` 以及「系统把通讯员停掉时，更新进程能不能活下来」都没在真机上跑过（万一更新进程被带走，下次通讯员启动会接着验证并在必要时退回）。
 - 真子网广播、macOS「本地网络」权限、Windows「专用网络」和防火墙。这里只用了 127.0.0.1。
 - 睡醒：Linux 上没有 macOS 的 NSWorkspace，也没有 Windows 的电源广播。代码里这两种监听都写了，但这台机器用的是时钟跳变（间隔超过 45 秒）和 IP 变化。没有做唤醒网卡。
 - 没有真的把信送进 Claude、pi、DeepSeek、Codex、Grok。端到端用的是假适配器，只验证通讯员把信交到了约定的位置、并按方案拼好了命令。
