@@ -127,8 +127,21 @@ def main() -> int:
         fail("状态页泄漏了信纸正文或密钥")
     if "Figma" in html or "figma" in html:
         fail("状态页不应出现外部产品名")
-    if "https://fonts.googleapis.com" not in html or "Inter" not in html:
+    if "Inter" not in html:
         fail("状态页没有使用 Inter 字体栈")
+    import re
+
+    external = re.findall(r"""(?:src|href)=["']https?://|url\(\s*["']?https?://|@import""", html)
+    if external:
+        fail(f"状态页不应引用外部网址（要能断网使用）：{external}")
+    if html.count("<svg") < 8 or 'class="ic"' not in html:
+        fail("状态页应该有内联的 Lucide 图标")
+    for emoji in ("📬", "✅", "⚠️", "🔔", "❌", "✉️"):
+        if emoji in html:
+            fail(f"状态页不应使用 emoji：{emoji}")
+    for need in ("本机", "机器名", "主人", "地址", "指纹", "网关", "端口", "版本", 'class="kv-row"'):
+        if need not in html:
+            fail(f"侧栏底部缺少带标签的一行：「{need}」")
     if label("awaiting_manual") != "待手动处理":
         fail("待手动处理标签被改掉了")
 

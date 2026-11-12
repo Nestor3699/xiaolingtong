@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from xlt import certevents, receipts
+from xlt.icons import icon
 from xlt.common import envelope_summary, read_json
 from xlt.store import Home, load_cache, load_config, load_directory, load_routes, load_windows
 
@@ -210,6 +211,8 @@ def collect(home: Home) -> dict:
         )
     runtime = read_json(home.root / "runtime.json", {})
     routes = load_routes(home)
+    mine = next((m for m in load_directory(home) if m.get("name") == cfg.get("me")), {})
+    from xlt.doctor import pid_alive
     try:
         from xlt.netinfo import choose_lan, format_doctor, unicast_targets
 
@@ -230,6 +233,9 @@ def collect(home: Home) -> dict:
         "person": cfg.get("person"),
         "owner": cfg.get("owner"),
         "version": "0.1.0",
+        "fingerprint": mine.get("cert_sha256") or "",
+        "ip": runtime.get("announce_ip") or cfg.get("announce_ip") or cfg.get("bind_ip") or "",
+        "gateway_running": pid_alive(runtime.get("pid")),
         "network": network,
         "panel_port": runtime.get("panel_port") or cfg.get("panel_port"),
         "tcp_port": runtime.get("tcp_port") or cfg.get("tcp_port"),
@@ -258,10 +264,19 @@ def _esc(value) -> str:
     return html.escape("" if value is None else str(value))
 
 
+BADGE_ICONS = {
+    "pending": "clock",
+    "receipt_stored": "check",
+    "receipt_read": "check-check",
+    "receiving": "paperclip",
+}
+
+
 def _badge(state: str | None) -> str:
     text = label(state)
     kind = state or "offline"
-    return f'<span class="badge { _esc(kind) }">{_esc(text)}</span>'
+    lead = icon(BADGE_ICONS[kind], 12) if kind in BADGE_ICONS else ""
+    return f'<span class="badge { _esc(kind) }">{lead}{_esc(text)}</span>'
 
 
 CSS = """
@@ -410,6 +425,8 @@ nav.side-nav a.active,
   background: transparent;
   font-weight: var(--weight);
 }
+.nav-label { display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.nav-label .ic { color: var(--text-secondary); }
 nav.side-nav .count {
   color: var(--text-secondary);
   font-size: 11px;
@@ -418,15 +435,78 @@ nav.side-nav .count {
 }
 .sidebar-foot {
   margin-top: auto;
-  padding: var(--space-3) var(--space-2) 0;
+  padding: var(--space-3) 4px 0;
+  border-top: 1px solid var(--border);
   font-size: 11px;
   line-height: 16px;
   color: var(--text-secondary);
 }
-.sidebar-foot .wake {
-  color: var(--text);
-  margin-bottom: var(--space-2);
+.foot-title {
+  padding: 0 var(--space-2);
+  margin-bottom: 4px;
+  font-size: 11px;
+  font-weight: var(--weight-strong);
+  line-height: 16px;
+  color: var(--text-meta);
 }
+.kv { margin: 0; }
+.kv-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 4px;
+  min-height: 24px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-row);
+}
+.kv-row:hover { background: var(--bg-secondary); }
+.kv-row dt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.kv-row dd {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  min-width: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.kv-row dd.mono { font-size: 11px; }
+.kv-row { padding-top: 2px; padding-bottom: 2px; }
+.kv-row dd .stack, .kv-row dd.stack { display: flex; flex-direction: column; align-items: flex-start; gap: 0; }
+.kv-row dd .sub { color: var(--text-secondary); font-size: 11px; }
+.ic { flex: 0 0 auto; stroke-width: 1.75; vertical-align: -3px; }
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-m);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.icon-btn:hover { background: var(--bg-pressed); color: var(--text); }
+.icon-btn.copied { color: var(--success-fg); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: 0 0 8px; }
+.dot.ok { background: #14ae5c; }
+.dot.off { background: #f24822; }
+.foot-note { margin: 4px 0 0; padding: 0 var(--space-2); }
+.foot-note summary { display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--text-secondary); line-height: 24px; list-style: none; }
+.foot-note summary .ic { transition: transform 0.12s ease; }
+.foot-note[open] summary .ic { transform: rotate(90deg); }
+.foot-note summary::-webkit-details-marker { display: none; }
+.foot-note p { margin: 0 0 var(--space-2); color: var(--text-secondary); }
+.foot-meta { padding: var(--space-2) var(--space-2) 0; color: var(--text-tertiary); }
 main.workspace {
   flex: 1 1 auto;
   min-width: 0;
@@ -595,6 +675,7 @@ tbody tr:focus td { background: var(--bg); }
   line-height: 16px;
   white-space: nowrap;
 }
+.badge .ic { margin-right: 4px; vertical-align: -2px; }
 .badge.online, .badge.replied, .badge.done, .badge.accepted, .badge.receipt_read { background: var(--success-bg); color: var(--success-fg); }
 .badge.receipt_stored { background: var(--bg-selected); color: var(--link); }
 .badge.offline, .badge.no_reply { background: var(--bg-secondary); color: var(--neutral-fg); }
@@ -649,6 +730,7 @@ tr.warn-row:focus { outline-color: var(--warning-fg); }
   font-size: 13px;
   line-height: 20px;
 }
+.alert-bar .alert-ic { flex: 0 0 auto; display: inline-flex; }
 .alert-bar .alert-body { flex: 1 1 auto; min-width: 0; }
 .alert-bar b { font-weight: var(--weight-strong); }
 .alert-bar .alert-sub { font-size: 11px; line-height: 16px; margin-top: 2px; color: #7a1c0f; }
@@ -681,6 +763,7 @@ tr.warn-row:focus { outline-color: var(--warning-fg); }
   .brand { height: auto; padding: var(--space-2) 4px; flex: none; }
   nav.side-nav { flex-direction: row; flex-wrap: wrap; }
   .sidebar-foot { margin-top: var(--space-3); }
+  .kv-row { grid-template-columns: 72px minmax(0, 1fr); }
   .page-head {
     height: auto;
     flex-direction: column;
@@ -695,10 +778,21 @@ tr.warn-row:focus { outline-color: var(--warning-fg); }
 
 
 
-def _nav_link(anchor: str, title: str, count: str | None = None, active: bool = False) -> str:
+NAV_ICONS = {
+    "peers": "users",
+    "pending": "clock",
+    "sent": "send",
+    "windows": "app-window",
+    "inbox": "inbox",
+    "rejects": "shield-ban",
+}
+
+
+def _nav_link(anchor: str, title: str, count: str | None = None, active: bool = False, with_icon: bool = False) -> str:
     badge = f'<span class="count">{_esc(count)}</span>' if count is not None else ""
     cls = ' class="active"' if active else ""
-    return f'<a href="#{_esc(anchor)}"{cls}><span>{_esc(title)}</span>{badge}</a>'
+    lead = icon(NAV_ICONS[anchor]) if with_icon and anchor in NAV_ICONS else ""
+    return f'<a href="#{_esc(anchor)}"{cls}><span class="nav-label">{lead}<span>{_esc(title)}</span></span>{badge}</a>'
 
 
 def _progress_bar(item: dict) -> str:
@@ -753,6 +847,7 @@ LIVE_JS = """(function () {
       y: window.scrollY,
       side: side ? side.scrollTop : 0,
       key: row ? row.getAttribute("data-row") : null,
+      note: !!document.querySelector(".foot-note[open]"),
       hash: location.hash
     };
   }
@@ -770,6 +865,8 @@ LIVE_JS = """(function () {
         }
       }
     }
+    var note = document.querySelector(".foot-note");
+    if (note && s.note) note.setAttribute("open", "");
     var side = document.querySelector(".sidebar");
     if (side) side.scrollTop = s.side;
     window.scrollTo(s.x, s.y);
@@ -818,6 +915,32 @@ LIVE_JS = """(function () {
       .catch(function () {})
       .then(function () { busy = false; });
   }
+
+  function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text);
+    }
+    return new Promise(function (resolve, reject) {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy") ? resolve() : reject(); } catch (e) { reject(e); }
+      document.body.removeChild(ta);
+    });
+  }
+
+  document.addEventListener("click", function (ev) {
+    var cp = ev.target && ev.target.closest ? ev.target.closest("[data-copy]") : null;
+    if (!cp) return;
+    copyText(cp.getAttribute("data-copy")).then(function () {
+      cp.classList.add("copied");
+      cp.setAttribute("title", "已复制");
+      setTimeout(function () { cp.classList.remove("copied"); cp.setAttribute("title", "复制完整指纹"); }, 1500);
+    });
+  });
 
   document.addEventListener("click", function (ev) {
     var btn = ev.target && ev.target.closest ? ev.target.closest("[data-dismiss]") : null;
@@ -949,6 +1072,7 @@ def render(snap: dict) -> str:
     for item in (snap.get("cert_alerts") or [])[:5]:
         alert_bars.append(
             f"<div class=\"alert-bar\" role=\"alert\" data-alert=\"{_esc(item.get('id'))}\">"
+            f"<span class=\"alert-ic\">{icon('triangle-exclamation-point', 18)}</span>"
             f"<div class=\"alert-body\"><b>证书被替换：{_esc(item.get('owner') or item.get('name'))}（{_esc(item.get('name'))}）</b>"
             f" 在 {_esc(_short_time(item.get('ts')))} 换了证书（来自 {_esc(item.get('ip') or '—')}）。"
             f"<div class=\"alert-sub\">旧指纹 <span class=\"fp\">{_esc(item.get('old_short'))}</span> → "
@@ -963,6 +1087,23 @@ def render(snap: dict) -> str:
             "<button type=\"button\" data-dismiss=\"all\">全部知道了</button></div>"
         )
     alert_html = f'<div class="alert-stack">{"".join(alert_bars)}</div>' if alert_bars else ""
+    full_fp = str(snap.get("fingerprint") or "")
+    if full_fp:
+        fp_cell = (
+            f'<span class="mono" title="{_esc(full_fp)}">{_esc(":".join(full_fp.upper().split(":")[:4]))}…</span>'
+            f'<button type="button" class="icon-btn" data-copy="{_esc(full_fp)}" title="复制完整指纹" aria-label="复制完整指纹">{icon("copy", 14)}</button>'
+        )
+    else:
+        fp_cell = "—"
+    started = _short_time(snap.get("started")) if snap.get("started") else ""
+    if snap.get("gateway_running", True):
+        gateway_cell = (
+            '<div class="stack"><span><span class="dot ok"></span> 运行中</span>'
+            + (f'<span class="sub">启动于 {_esc(started)}</span>' if started else "")
+            + "</div>"
+        )
+    else:
+        gateway_cell = '<span><span class="dot off"></span> 没在运行</span>'
     online = sum(1 for p in snap["peers"] if p["state"] == "online")
     owner = snap.get("owner") or snap.get("me")
     return f"""<!DOCTYPE html>
@@ -971,9 +1112,6 @@ def render(snap: dict) -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>小灵通通讯员 · {_esc(owner)}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;550;600&amp;family=Roboto+Mono:wght@400;500&amp;display=swap">
 <style>
 {CSS}
 </style>
@@ -989,18 +1127,29 @@ def render(snap: dict) -> str:
       </div>
     </div>
     <nav class="side-nav">
-      {_nav_link('peers', '同事', str(online))}
-      {_nav_link('pending', '待送达', str(len(snap['pending'])))}
-      {_nav_link('sent', '已发出', str(len(snap.get('sent') or [])))}
-      {_nav_link('windows', '收信窗口', str(len(snap['windows'])))}
-      {_nav_link('inbox', '收到的信', str(len(snap['inbox'])))}
-      {_nav_link('rejects', '被拒记录', str(len(snap['rejects'])))}
+      {_nav_link('peers', '同事', str(online), with_icon=True)}
+      {_nav_link('pending', '待送达', str(len(snap['pending'])), with_icon=True)}
+      {_nav_link('sent', '已发出', str(len(snap.get('sent') or [])), with_icon=True)}
+      {_nav_link('windows', '收信窗口', str(len(snap['windows'])), with_icon=True)}
+      {_nav_link('inbox', '收到的信', str(len(snap['inbox'])), with_icon=True)}
+      {_nav_link('rejects', '被拒记录', str(len(snap['rejects'])), with_icon=True)}
     </nav>
     <div class="sidebar-foot">
-      <div class="wake">{_esc(snap.get('wake_note') or '睡醒检测说明还没写上。')}</div>
-      <div>TCP {_esc(snap.get('tcp_port'))} · UDP {_esc(snap.get('udp_port'))}</div>
-      <div>本页只在这台电脑上</div>
-      <div class="mono">127.0.0.1:{_esc(snap.get('panel_port'))}</div>
+      <div class="foot-title">本机</div>
+      <dl class="kv">
+        <div class="kv-row"><dt>{icon('laptop')}<span>机器名</span></dt><dd>{_esc(snap.get('me') or '—')}</dd></div>
+        <div class="kv-row"><dt>{icon('users')}<span>主人</span></dt><dd>{_esc(snap.get('owner') or '—')} · {_esc(snap.get('person') or '—')}</dd></div>
+        <div class="kv-row"><dt>{icon('network')}<span>地址</span></dt><dd class="mono">{_esc(snap.get('ip') or '—')}</dd></div>
+        <div class="kv-row"><dt>{icon('fingerprint-pattern')}<span>指纹</span></dt><dd>{fp_cell}</dd></div>
+        <div class="kv-row"><dt>{icon('activity')}<span>网关</span></dt><dd>{gateway_cell}</dd></div>
+        <div class="kv-row"><dt>{icon('plug')}<span>端口</span></dt><dd class="stack mono"><span>TCP {_esc(snap.get('tcp_port'))}</span><span>UDP {_esc(snap.get('udp_port'))}</span></dd></div>
+        <div class="kv-row"><dt>{icon('info')}<span>版本</span></dt><dd>{_esc(snap.get('version') or '—')}</dd></div>
+      </dl>
+      <details class="foot-note">
+        <summary>{icon('chevron-right', 14)}<span>睡醒检测</span></summary>
+        <p>{_esc(snap.get('wake_note') or '睡醒检测说明还没写上。')}</p>
+      </details>
+      <div class="foot-meta">本页只在这台电脑上<br><span class="mono">127.0.0.1:{_esc(snap.get('panel_port'))}</span></div>
     </div>
   </aside>
   <main class="workspace">

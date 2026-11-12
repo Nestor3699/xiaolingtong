@@ -383,6 +383,10 @@ launchctl kickstart -k gui/$(id -u)/com.xiaolingtong.gateway
 
 若这台机器关闭了 `auto_trust`，则改走附录「手工交换证书」。
 
+## 升级已部署的机器（给 agent）
+
+主人说「更新一下」时：`git pull`、在虚拟环境里 `pip install -e .`、重启通讯员（macOS：`launchctl kickstart -k gui/$(id -u)/com.xiaolingtong.gateway`；Windows：`Stop-ScheduledTask` 再 `Start-ScheduledTask` 任务「Xiaolingtong Gateway」；若是手动 `xlt serve` 启动的，停掉再启动）。不要重新 `xlt init`，不要改 `~/.xlt/`。新旧版本能互相收发（新增字段都是可选的，新接口是只读的）；对方没升级时看不到他的「已读」。升级后跑一次 `"$XLT" doctor`，把它的输出原样转述给主人；有一项不通就按它写的修法办。不要打印 `~/.xlt/` 里的密钥。
+
 ## 附件
 
 给同事发文件（任意类型，不限大小）：
@@ -407,14 +411,15 @@ launchctl kickstart -k gui/$(id -u)/com.xiaolingtong.gateway
 | 看成员名单 | `"$XLT" peers` |
 | 启动通讯员 | `"$XLT" serve`（办公室不要加 `--bind 127.0.0.1`） |
 | 看本机状态 | `"$XLT" status`；状态页 http://127.0.0.1:47321 |
-| 网络诊断 | `"$XLT" doctor`（选中的网卡、广播地址、检测到的 VPN） |
+| 自检 | `"$XLT" doctor`（Windows 防火墙、端口 47800/47801/47321、网卡与广播地址、Clash TUN / Tailscale，每一项给出大白话修法；`--json` 给脚本用） |
+| 发出的信状态 | `"$XLT" sent`（待送达 / 已送达 / 已读） |
 | 看窗口 / 路由 | `"$XLT" windows`　`"$XLT" route show` |
 | 登记窗口 | `"$XLT" register --agent <名> --window <窗口> --delivery channel\|extension\|headless\|popup\|webhook …` |
 | 设默认窗口 | `"$XLT" route default <agent>/<窗口>` |
 | 发信 | `"$XLT" send --to <人名id> --type ask\|notify --subject "…" --text "…" ` 或 `--file <信纸>`；附加文件加 `--attach <路径>`（可重复） |
 | 回信 | `"$XLT" reply <消息id> --text "…"` 或 `--file <信纸>`；也可加 `--attach <路径>` |
 | 标记已处理、不回信 | `"$XLT" done <消息id>` |
-| 看收件箱 / 待发箱 | `"$XLT" inbox`　`"$XLT" outbox` |
+| 看收件箱 / 待发箱 | `"$XLT" inbox`　`"$XLT" outbox`（含下一次重试时间）　`"$XLT" read <msg-id>`（标已读） |
 | 检查权限清单 | `"$XLT" policy check` |
 | 给已登记同事补上写信权限 | `"$XLT" policy grant-trusted`（已有安装升级后用；自动发现或 `xlt trust` 会授予普通写信权限） |
 | 关闭自动登记 | `xlt init --no-auto-trust`，或把 `~/.xlt/config.json` 的 `auto_trust` 设为 `false`；之后按附录手工交换证书 |
