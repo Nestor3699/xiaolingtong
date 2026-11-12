@@ -143,6 +143,7 @@ def _sent_rows(home: Home, all_pending: list[dict], limit: int = 40) -> list[dic
             item["status"] = "pending" if waiting["box"] == "pending" else waiting["box"]
             if waiting.get("attach_progress"):
                 item["detail"] = waiting["attach_progress"]
+                item["attach_bytes"] = waiting.get("attach_bytes")
         else:
             mark = marks.get(msg_id) or {}
             if mark.get("state") == "read":
@@ -599,6 +600,20 @@ tbody tr:focus td { background: var(--bg); }
 .badge.offline, .badge.no_reply { background: var(--bg-secondary); color: var(--neutral-fg); }
 .badge.awaiting_manual, .badge.queued, .badge.pending, .badge.delivering, .badge.receiving { background: var(--warning-bg); color: var(--warning-fg); }
 .badge.failed, .badge.egress_blocked, .badge.unreachable, .badge.declined, .badge.expired { background: var(--danger-bg); color: var(--danger-fg); }
+.progress {
+  width: 160px;
+  height: 6px;
+  margin-top: 6px;
+  border-radius: var(--radius-full);
+  background: var(--bg-pressed);
+  overflow: hidden;
+}
+.progress > span {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--outline-selected);
+}
 .warn {
   background: var(--warning-bg);
   color: var(--warning-fg);
@@ -684,6 +699,20 @@ def _nav_link(anchor: str, title: str, count: str | None = None, active: bool = 
     badge = f'<span class="count">{_esc(count)}</span>' if count is not None else ""
     cls = ' class="active"' if active else ""
     return f'<a href="#{_esc(anchor)}"{cls}><span>{_esc(title)}</span>{badge}</a>'
+
+
+def _progress_bar(item: dict) -> str:
+    """附件传输进度条。没有附件的信不画。"""
+    info = item.get("attach_bytes")
+    if not info or not info.get("total"):
+        return ""
+    pct = int(info.get("pct") or 0)
+    text = _esc(item.get("attach_progress") or "")
+    return (
+        f'<div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{pct}">'
+        f'<span style="width:{pct}%"></span></div>'
+        f'<div class="tiny">{text}（{pct}%）</div>'
+    )
 
 
 def _retry_note(item: dict) -> str:
@@ -842,7 +871,7 @@ def render(snap: dict) -> str:
             f"<td>{_esc(item.get('type'))}</td>"
             f"<td>{_esc(item.get('subject') or '—')}</td>"
             f"<td>{_badge((item.get('state') or {}).get('status') or 'pending')}"
-            f"{_retry_note(item)}</td>"
+            f"{_retry_note(item)}{_progress_bar(item)}</td>"
             f"<td>{_esc(item.get('attempts'))}</td>"
             f"<td>{_esc(item.get('letter_bytes'))} 字节</td>"
             "</tr>"
@@ -859,7 +888,8 @@ def render(snap: dict) -> str:
             f"<td>{_esc(item.get('type'))}</td>"
             f"<td>{_esc(item.get('subject') or '—')}</td>"
             f"<td>{_badge(item.get('status'))}"
-            f"{('<div class=tiny>' + _esc(item['detail']) + '</div>') if item.get('detail') else ''}</td>"
+            f"{('<div class=tiny>' + _esc(item['detail']) + '</div>') if item.get('detail') and not item.get('attach_bytes') else ''}"
+            f"{_progress_bar(dict(item, attach_progress=item.get('detail'))) if item.get('attach_bytes') else ''}</td>"
             f"<td class='tiny'>{_esc(_short_time(item.get('created')))}</td>"
             "</tr>"
         )
@@ -877,7 +907,8 @@ def render(snap: dict) -> str:
             f"<td>{_esc(item.get('subject') or '—')}</td>"
             f"<td>{_esc((item.get('state') or {}).get('routed_to') or item.get('folder'))}</td>"
             f"<td>{_badge(state)}"
-            f"{('<div class=tiny>已读 ' + _esc(_short_time(item.get('read_at'))) + '</div>') if item.get('read') else '<div class=tiny>还没读</div>'}</td>"
+            f"{('<div class=tiny>已读 ' + _esc(_short_time(item.get('read_at'))) + '</div>') if item.get('read') else '<div class=tiny>还没读</div>'}"
+            f"{_progress_bar(item) if (item.get('state') or {}).get('status') == 'receiving' else ''}</td>"
             f"<td>{_esc(item.get('letter_bytes'))} 字节</td>"
             "</tr>"
         )

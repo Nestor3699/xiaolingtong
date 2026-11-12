@@ -1121,7 +1121,7 @@ class Engine:
                 )
                 if code == 200:
                     got = _json_body(body)
-                    sent = max(sent, int(got.get("received") or 0))
+                    sent = int(got.get("received") or 0)  # 对方收到多少就是多少，以对方为准
                 elif code == 404:
                     self._move(env_path, self.home.pending / "failed")
                     return {
@@ -1166,7 +1166,9 @@ class Engine:
                     return _queued(env, "传输中断，已记下进度，上线后自动续传")
                 parsed = _json_body(body)
                 if code == 409:
-                    sent = int(parsed.get("received") or sent)
+                    # 对方说它只收到 N 字节（哈希校验失败时 N 是 0）。以对方为准，不能写成 `or sent`：0 会被当成「没说」。
+                    got = parsed.get("received")
+                    sent = int(got) if got is not None else sent
                     att["sent"] = sent
                     write_json(env_path, env)
                     continue
@@ -1209,8 +1211,8 @@ class Engine:
             att = _find_att(env, att_id)
             if att is None:
                 return 404, _err("NOT_FOUND", "没有这个附件", req_id)
-            received = int(att.get("received") or 0)
             size = int(att.get("size") or 0)
+            received = _effective_received(att)
             return 200, {"id": att_id, "received": received, "size": size, "complete": received >= size and size >= 0}
 
     def on_attach_chunk(self, member: dict, msg_id: str, att_id: str, offset: int, length: int, reader, req_id: str) -> tuple[int, dict]:
@@ -1230,7 +1232,10 @@ class Engine:
                 if att is None:
                     return 404, _err("NOT_FOUND", "没有这个附件", req_id)
                 size = int(att.get("size") or 0)
-                received = int(att.get("received") or 0)
+                received = _effective_received(att)
+                if received != int(att.get("received") or 0):
+                    att["received"] = received  # 半截文件被删或截短了，退回到真正有的字节数
+                    write_json(found, env)
                 dest = Path(att.get("path") or "")
                 if not dest:
                     return 400, _err("BAD_ENVELOPE", "附件路径无效", req_id)
@@ -1523,7 +1528,19 @@ def _merge_resume(env: dict, offsets: list) -> None:
             received = int(got.get("received") or 0)
         except (TypeError, ValueError):
             continue
-        att["sent"] = max(int(att.get("sent") or 0), received)
+        att["sent"] = received  # 以对方实际收到的为准；对方丢了半截文件时，要能退回去重传
+
+
+def _effective_received(att: dict) -> int:
+    """记录里说收了多少，和磁盘上半截文件实际有多少，取小的。没收完时半截文件丢了就当 0。"""
+    claimed = int(att.get("received") or 0)
+    if att.get("complete") or claimed == 0:
+        return claimed
+    try:
+        actual = Path(str(att.get("path") or "") + ".part").stat().st_size
+    except OSError:
+        actual = 0
+    return min(claimed, actual)
 
 
 def _find_att(env: dict, att_id: str):

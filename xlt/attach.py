@@ -144,6 +144,19 @@ def public_attachments(items) -> list[dict]:
     return out
 
 
+def progress_bytes(items) -> dict:
+    """进度条用：已传 / 总共（字节）和百分比。发信方看 sent，收信方看 received。"""
+    done = 0
+    total = 0
+    for item in items or []:
+        size = int(item.get("size") or 0)
+        moved = int(item.get("sent") or item.get("received") or 0)
+        total += size
+        done += min(moved, size)
+    pct = 100 if total == 0 else int(done * 100 / total)
+    return {"done": done, "total": total, "pct": pct, "files": len(list(items or []))}
+
+
 def progress_text(items) -> str:
     items = list(items or [])
     if not items:

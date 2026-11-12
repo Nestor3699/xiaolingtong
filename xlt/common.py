@@ -93,10 +93,11 @@ def envelope_summary(env: dict) -> dict:
             "last_error": state.get("last_error"),
         }
     if env.get("attachments"):
-        from xlt.attach import progress_text, public_attachments
+        from xlt.attach import progress_bytes, progress_text, public_attachments
 
         out["attachments"] = public_attachments(env.get("attachments"))
         out["attach_progress"] = progress_text(env.get("attachments"))
+        out["attach_bytes"] = progress_bytes(env.get("attachments"))
     return out
 
 
