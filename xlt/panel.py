@@ -6,7 +6,7 @@ import html
 import json
 from pathlib import Path
 
-from xlt import receipts
+from xlt import certevents, receipts
 from xlt.common import envelope_summary, read_json
 from xlt.store import Home, load_cache, load_config, load_directory, load_routes, load_windows
 
@@ -242,6 +242,10 @@ def collect(home: Home) -> dict:
         "peers": peers,
         "pending": active,
         "sent": _sent_rows(home, pending),
+        "cert_alerts": [
+            dict(item, old_short=certevents.short_fp(item.get("old_fp")), new_short=certevents.short_fp(item.get("new_fp")))
+            for item in certevents.active(home)
+        ],
         "pending_failed": [row for row in pending if row["box"] != "pending"][-10:],
         "inbox": _inbox_rows(home)[:30],
         "windows": windows,
@@ -618,6 +622,36 @@ tr.warn-row:focus { outline-color: var(--warning-fg); }
   margin-left: 8px;
   white-space: nowrap;
 }
+.alert-stack { display: flex; flex-direction: column; }
+.alert-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 8px var(--space-5);
+  background: var(--danger-bg);
+  color: var(--danger-fg);
+  border-bottom: 1px solid #f5b8b0;
+  font-size: 13px;
+  line-height: 20px;
+}
+.alert-bar .alert-body { flex: 1 1 auto; min-width: 0; }
+.alert-bar b { font-weight: var(--weight-strong); }
+.alert-bar .alert-sub { font-size: 11px; line-height: 16px; margin-top: 2px; color: #7a1c0f; }
+.alert-bar .fp { font-family: var(--font-mono); font-size: 11px; }
+.alert-bar button {
+  flex: 0 0 auto;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid #e3a49b;
+  border-radius: var(--radius-full);
+  background: #fff;
+  color: var(--danger-fg);
+  font: inherit;
+  font-size: 12px;
+  font-weight: var(--weight-strong);
+  cursor: pointer;
+}
+.alert-bar button:hover { background: #fff5f4; }
 @media (max-width: 860px) {
   .app { display: block; }
   .sidebar {
@@ -726,8 +760,8 @@ LIVE_JS = """(function () {
     el.textContent = sec <= 0 ? "刚刚更新" : (sec + " 秒前更新");
   }
 
-  function tick() {
-    if (busy || selecting()) return;
+  function tick(force) {
+    if (busy || (!force && selecting())) return;
     busy = true;
     var url = location.pathname || "/";
     fetch(url, {cache: "no-store", headers: {Accept: "text/html"}})
@@ -736,7 +770,7 @@ LIVE_JS = """(function () {
         return res.text();
       })
       .then(function (text) {
-        if (selecting()) return;
+        if (!force && selecting()) return;
         var doc = new DOMParser().parseFromString(text, "text/html");
         var next = doc.querySelector(".app");
         var cur = document.querySelector(".app");
@@ -756,10 +790,21 @@ LIVE_JS = """(function () {
       .then(function () { busy = false; });
   }
 
-  document.addEventListener("visibilitychange", function () {
-    if (!document.hidden) tick();
+  document.addEventListener("click", function (ev) {
+    var btn = ev.target && ev.target.closest ? ev.target.closest("[data-dismiss]") : null;
+    if (!btn) return;
+    btn.disabled = true;
+    fetch("/local/cert-dismiss", {
+      method: "POST",
+      headers: {"Content-Type": "application/json", "X-Xlt-Panel": "1"},
+      body: JSON.stringify({id: btn.getAttribute("data-dismiss")})
+    }).then(function () { tick(true); }).catch(function () { btn.disabled = false; });
   });
-  setInterval(tick, INTERVAL);
+
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) tick(false);
+  });
+  setInterval(function () { tick(false); }, INTERVAL);
   setInterval(paintStamp, 1000);
   paintStamp();
 })();
@@ -869,6 +914,24 @@ def render(snap: dict) -> str:
     if not rej_rows:
         rej_rows.append(f"{_tr('empty-rejects')}<td colspan='4' class='muted'>没有被拒记录。</td></tr>")
 
+    alert_bars = []
+    for item in (snap.get("cert_alerts") or [])[:5]:
+        alert_bars.append(
+            f"<div class=\"alert-bar\" role=\"alert\" data-alert=\"{_esc(item.get('id'))}\">"
+            f"<div class=\"alert-body\"><b>证书被替换：{_esc(item.get('owner') or item.get('name'))}（{_esc(item.get('name'))}）</b>"
+            f" 在 {_esc(_short_time(item.get('ts')))} 换了证书（来自 {_esc(item.get('ip') or '—')}）。"
+            f"<div class=\"alert-sub\">旧指纹 <span class=\"fp\">{_esc(item.get('old_short'))}</span> → "
+            f"新指纹 <span class=\"fp\">{_esc(item.get('new_short'))}</span>。"
+            "如果对方没有重装过小灵通或换过电脑，请当面确认，可能有人冒充。</div></div>"
+            f"<button type=\"button\" data-dismiss=\"{_esc(item.get('id'))}\">知道了</button></div>"
+        )
+    extra_alerts = len(snap.get("cert_alerts") or []) - 5
+    if extra_alerts > 0:
+        alert_bars.append(
+            f"<div class=\"alert-bar\" role=\"alert\"><div class=\"alert-body\">还有 {extra_alerts} 条证书替换提醒。</div>"
+            "<button type=\"button\" data-dismiss=\"all\">全部知道了</button></div>"
+        )
+    alert_html = f'<div class="alert-stack">{"".join(alert_bars)}</div>' if alert_bars else ""
     online = sum(1 for p in snap["peers"] if p["state"] == "online")
     owner = snap.get("owner") or snap.get("me")
     return f"""<!DOCTYPE html>
@@ -910,6 +973,7 @@ def render(snap: dict) -> str:
     </div>
   </aside>
   <main class="workspace">
+    {alert_html}
     <header class="page-head">
       <div class="page-title">
         <h1>小灵通通讯员</h1>

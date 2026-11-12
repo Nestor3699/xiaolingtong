@@ -263,6 +263,15 @@ class LocalHandler(BaseHTTPRequestHandler):
             self._send(400, {"status": "rejected", "reason": "BAD_ENVELOPE", "message": "需要 JSON"})
             return None
 
+    def _panel_guard(self) -> bool:
+        """只接受状态页自己发的修改请求。别的网页也能向 127.0.0.1 发 POST，
+        所以要求自定义头（浏览器对跨站请求会先预检并拒绝），再核对 Host，挡住 DNS 重绑定。"""
+        host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
+        if self.headers.get("X-Xlt-Panel") != "1" or host not in ("127.0.0.1", "localhost", "::1"):
+            self._send(403, {"status": "rejected", "reason": "NO_GRANT", "message": "只接受状态页自己发出的请求"})
+            return False
+        return True
+
     def do_GET(self):
         if self._remote():
             return
@@ -302,6 +311,14 @@ class LocalHandler(BaseHTTPRequestHandler):
                 return
             if path == "/local/reply":
                 self._send(200, engine.local_reply(data.get("msg_id") or "", data.get("text") or "", data.get("status") or "replied", attachments=data.get("attachments") or []))
+                return
+            if path == "/local/cert-dismiss":
+                if not self._panel_guard():
+                    return
+                from xlt import certevents
+
+                count = certevents.dismiss(engine.home, str(data.get("id") or ""))
+                self._send(200, {"status": "ok", "dismissed": count})
                 return
             if path == "/local/done":
                 self._send(200, engine.local_done(data.get("msg_id") or ""))

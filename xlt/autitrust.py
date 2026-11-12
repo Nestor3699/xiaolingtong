@@ -139,6 +139,9 @@ def admit_from_broadcast(home: Home, msg: dict, ip: str, log) -> str | None:
         line = f"警告：证书已替换 {name} 旧指纹 {old_fp} 新指纹 {claimed}"
         log(line)
         _store_warning(home, name, line, ip, port)
+        from xlt import certevents
+
+        certevents.record_replacement(home, name, owner, old_fp, claimed, ip)
         return "replaced"
     log(f"已自动登记 {name}（{person}），授予普通写信权限（{' / '.join(LETTER_OPS)}，含这些信上的附件）")
     return "added"
