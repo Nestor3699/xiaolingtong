@@ -113,7 +113,9 @@ def main(argv=None) -> int:
 
     sub.add_parser("windows").set_defaults(func=cmd_windows)
     sub.add_parser("status").set_defaults(func=cmd_status)
-    sub.add_parser("doctor", help="查看选中的网卡、广播地址和 VPN 干扰").set_defaults(func=cmd_doctor)
+    doctor = sub.add_parser("doctor", help="自检：端口、防火墙、VPN/广播、同事能不能看到；每项给出怎么修")
+    doctor.add_argument("--json", action="store_true", help="输出 JSON，给脚本用")
+    doctor.set_defaults(func=cmd_doctor)
     sub.add_parser("inbox").set_defaults(func=cmd_inbox)
     read = sub.add_parser("read", help="读一封收到的信（打印信纸，并告诉发信人「已读」）")
     read.add_argument("msg_id")
@@ -337,12 +339,19 @@ def cmd_windows(home: Home, args) -> int:
 
 
 def cmd_doctor(home: Home, args) -> int:
+    from xlt import doctor
     from xlt.netinfo import choose_lan, format_doctor, unicast_targets
-    from xlt.store import load_config, load_directory, runtime_path
 
+    system = doctor.current_system()
+    choice = choose_lan()
+    checks = doctor.run_checks(home, system=system, choice=choice)
+    if getattr(args, "json", False):
+        print(doctor.to_json(checks))
+        return 1 if any(item.status == doctor.FAIL for item in checks) else 0
+    print(doctor.format_checks(checks, system))
     cfg = load_config(home)
     runtime = read_json(runtime_path(home), {})
-    choice = choose_lan()
+    print()
     print(format_doctor(choice, cfg, {
         "listen_ip": runtime.get("listen_ip") or choice.listen_ip,
         "bind": runtime.get("bind") or cfg.get("bind_ip"),
@@ -351,7 +360,7 @@ def cmd_doctor(home: Home, args) -> int:
     if runtime.get("iface") or runtime.get("broadcasts"):
         used = "、".join(runtime.get("broadcasts") or [])
         print(f"通讯员启动时：网卡 {runtime.get('iface') or '—'}  广播 {used or '—'}")
-    return 0
+    return 1 if any(item.status == doctor.FAIL for item in checks) else 0
 
 
 def cmd_status(home: Home, args) -> int:
