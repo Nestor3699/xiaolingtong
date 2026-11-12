@@ -301,3 +301,17 @@ auth.css `:root`：
 - 关键布局直接写在元素上（内联样式）：图标的 `width/height/display/vertical-align`、导航里图标和文字的 flex 和间距、本机块的两列（`grid-template-columns: var(--kv-label,64px) 1fr`）、TCP/UDP 与网关的分行（`flex-direction:column`）、复制按钮 22×22、睡醒检测 `summary` 的 `display:flex; list-style:none`（只剩一个小三角）。样式表完全不生效时，这些也不乱。
 - 本地接口的响应带 `Cache-Control: no-store`。
 - 验证：`e2e/panel_stale_e2e.py`（真通讯员 + 真浏览器：旧版本页面遇上升级、样式变了自动刷新、没有样式表时的布局）。截图：`/workspace/xlt-ui/v4-*.png`（Chromium 和 WebKit，前后对比）。
+
+## 12. 点开一封信看正文（v5）
+
+列表里仍然只显示信封（标题、谁、状态、大小），正文不进每 5 秒刷新用的页面快照。要点开才去取正文。
+
+- 在「收到的信」「已发出」「待送达」里点一行，或焦点在这一行时按 Enter，右侧滑出阅读面板（同一页，不跳走）。再点同一行、按 Esc，或点 ×，都会关掉。
+- 地址变成 `#inbox:msg-…` / `#sent:msg-…` / `#pending:msg-…`。5 秒原地刷新和整页重新加载都要还能对着这封信；刷新不能把阅读区关掉，也不能把阅读区的滚动位置清掉。
+- 阅读面板里有：来自/发给、类型、标题、时间、状态（收信是已读/未读，发出是待送达/已送达/已读等）、窗口/目录、消息编号、全文、附件列表（文件名、大小、本机路径）。附件只展示路径，页面不打开、不执行这些文件。
+- 正文按普通文本处理：先把 HTML 转义，再允许非常简单的 markdown（标题、加粗、代码块、列表）。不要把信纸里的 HTML 当页面来跑。正文不在本机时写「正文已不在本机」，不要编造。信特别长时只显示前面一段，并注明完整内容在哪个文件。
+- 打开一封还没读的收信时，用和 `xlt read` 相同的回执函数记为已读（`receipts.mark_read_local`，来源是 `panel`）。
+- 正文只通过本机状态页接口 `GET /local/letter` 提供，要带和「知道了」一样的 `X-Xlt-Panel: 1` 头，绝不挂到局域网 TLS 端口上。
+- 信纸位置：收到的在 `~/.xlt/inbox/<窗口>/msg-….letter.md`（也包括 `_hold`、`_expired`）；发出还没送到的在 `~/.xlt/pending/…/*.letter.md`。已发出只在 `sent.jsonl` 里留下信封时，常常已经没有信纸。附件在 `~/.xlt/inbox/<消息编号>/attachments/`。
+- 图标继续用 Lucide：关闭是 `x`，附件是 `paperclip`。v4 的旧页面规则仍然有效（样式表链在 `.app` 里、关键布局写在元素上、版本号对不上就整页刷新一次）。
+- 验证：`e2e/panel_letter_e2e.py`（真通讯员 + 真浏览器）。截图：`/workspace/xlt-ui/v5-letter.png`、`v5-letter-sidebar-reader.png`。

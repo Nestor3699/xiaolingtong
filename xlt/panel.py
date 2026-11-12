@@ -1,10 +1,11 @@
-"""本机状态页。只渲染信封，不读信纸。"""
+"""本机状态页。列表只渲染信封；点开一封信时再取正文。"""
 
 from __future__ import annotations
 
 import hashlib
 import html
 import json
+import re
 from pathlib import Path
 
 from xlt import certevents, receipts, updater
@@ -165,6 +166,146 @@ def _sent_rows(home: Home, all_pending: list[dict], limit: int = 40) -> list[dic
 def _short_time(value) -> str:
     text = str(value or "")
     return text[5:16].replace("T", " ") if len(text) >= 16 else text
+
+
+
+_MSG_ID = re.compile(r"^msg-[A-Za-z0-9._-]+$")
+DISPLAY_MAX = 200_000
+LETTER_BOXES = ("inbox", "sent", "pending")
+
+
+def _safe_msg_id(msg_id: str) -> bool:
+    return bool(msg_id) and _MSG_ID.fullmatch(msg_id) is not None
+
+
+def _find_box_env(home: Home, box: str, msg_id: str) -> Path | None:
+    root = home.inbox if box == "inbox" else home.pending
+    if not root.exists():
+        return None
+    for path in root.rglob(f"{msg_id}.env.json"):
+        return path
+    return None
+
+
+def _sent_meta(home: Home, msg_id: str) -> dict | None:
+    from xlt.store import load_sent
+
+    for row in load_sent(home):
+        if row.get("id") == msg_id:
+            return row
+    return None
+
+
+def _read_body(path: Path) -> tuple[str, bool]:
+    data = path.read_bytes()
+    truncated = len(data) > DISPLAY_MAX
+    if truncated:
+        data = data[:DISPLAY_MAX]
+    return data.decode("utf-8", errors="replace"), truncated
+
+
+def _attach_entries(home: Home, env: dict) -> list[dict]:
+    from xlt.attach import attachment_dir
+
+    out: list[dict] = []
+    seen: set[str] = set()
+    dest_dir = attachment_dir(home, env.get("id") or "")
+    for item in env.get("attachments") or []:
+        name = str(item.get("name") or "file")
+        path = item.get("path") or item.get("source") or str(dest_dir / name)
+        seen.add(name)
+        seen.add(str(path))
+        out.append({"name": name, "size": int(item.get("size") or 0), "path": str(path)})
+    if dest_dir.exists():
+        for file in sorted(dest_dir.iterdir()):
+            if not file.is_file() or file.name in seen or str(file) in seen:
+                continue
+            out.append({"name": file.name, "size": file.stat().st_size, "path": str(file)})
+    return out
+
+
+def _outbound_status(home: Home, env_path: Path | None, msg_id: str) -> str:
+    if env_path is not None:
+        parts = set(env_path.parts)
+        if "expired" in parts:
+            return "expired"
+        if "failed" in parts:
+            return "failed"
+        return "pending"
+    mark = receipts.get(home, msg_id) or {}
+    if mark.get("state") == "read":
+        return "receipt_read"
+    return "receipt_stored"
+
+
+def letter_view(home: Home, box: str, msg_id: str) -> tuple[dict, int]:
+    """取一封信的正文。只给本机状态页用。打开未读的收信时，按 xlt read 同样的方式记为已读。"""
+    if box not in LETTER_BOXES:
+        return {"error": {"code": "BAD_BOX", "message": "只能看收到的信、已发出或待送达"}}, 400
+    if not _safe_msg_id(msg_id):
+        return {"error": {"code": "BAD_ID", "message": "消息编号不对"}}, 400
+
+    env_path = _find_box_env(home, "inbox" if box == "inbox" else "pending", msg_id)
+    sent_row = _sent_meta(home, msg_id) if box == "sent" else None
+    if env_path is None and not sent_row:
+        return {"error": {"code": "NOT_FOUND", "message": "本机没有这封信"}}, 404
+
+    env = read_json(env_path, {}) if env_path else dict(sent_row or {})
+    if box == "inbox" and env_path is not None:
+        receipts.mark_read_local(home, msg_id, via="panel")
+        env = read_json(env_path, {}) or env
+
+    letter_path = env_path.with_name(f"{msg_id}.letter.md") if env_path else None
+    body = ""
+    missing = True
+    truncated = False
+    body_path = str(letter_path) if letter_path else ""
+    if letter_path is not None and letter_path.exists():
+        missing = False
+        body, truncated = _read_body(letter_path)
+
+    read, read_at = False, None
+    if box == "inbox" and env_path is not None:
+        read, read_at, _via = receipts.read_info(home, env_path, env)
+
+    if box == "inbox":
+        status = (env.get("state") or {}).get("status") or ""
+        read_label = "已读" if read else "未读"
+    else:
+        status = _outbound_status(home, env_path, msg_id)
+        read_label = label(status)
+
+    state = env.get("state") or {}
+    if box == "inbox":
+        folder = env_path.parent.name if env_path else ""
+        window = state.get("routed_to") or folder
+    else:
+        window = env.get("origin_window") or (sent_row or {}).get("origin_window") or ""
+        folder = (env_path.parent.name if env_path else "") or window
+
+    return {
+        "id": msg_id,
+        "box": box,
+        "from": env.get("from") or (sent_row or {}).get("from"),
+        "from_person": env.get("from_person") or "",
+        "to": env.get("to") or (sent_row or {}).get("to") or "",
+        "to_member": env.get("to_member") or (sent_row or {}).get("to_member") or "",
+        "type": env.get("type") or (sent_row or {}).get("type") or "",
+        "subject": env.get("subject") or (sent_row or {}).get("subject") or "",
+        "created": env.get("created") or env.get("ts") or (sent_row or {}).get("created") or (sent_row or {}).get("ts") or "",
+        "status": status,
+        "status_label": label(status) if status else "—",
+        "read": read,
+        "read_at": read_at,
+        "read_label": read_label,
+        "folder": folder,
+        "window": window,
+        "body": body,
+        "body_missing": missing,
+        "body_truncated": truncated,
+        "body_path": body_path,
+        "attachments": _attach_entries(home, env) if env_path else [],
+    }, 200
 
 
 def collect(home: Home) -> dict:
@@ -435,6 +576,19 @@ nav.side-nav a.active,
   background: transparent;
   font-weight: var(--weight);
 }
+.app[data-view="peers"] nav.side-nav a[href="#peers"],
+.app[data-view="pending"] nav.side-nav a[href="#pending"],
+.app[data-view="sent"] nav.side-nav a[href="#sent"],
+.app[data-view="windows"] nav.side-nav a[href="#windows"],
+.app[data-view="inbox"] nav.side-nav a[href="#inbox"],
+.app[data-view="rejects"] nav.side-nav a[href="#rejects"] {
+  background: var(--bg-selected);
+  font-weight: var(--weight-strong);
+}
+.app[data-view]:not([data-view="peers"]) nav.side-nav a[href="#peers"] {
+  background: transparent;
+  font-weight: var(--weight);
+}
 .nav-label { display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; }
 .nav-label .ic { color: var(--text-secondary); }
 nav.side-nav .count {
@@ -609,6 +763,19 @@ main.workspace {
   background: transparent;
   font-weight: var(--weight);
 }
+.app[data-view="peers"] .tabs a[href="#peers"],
+.app[data-view="pending"] .tabs a[href="#pending"],
+.app[data-view="sent"] .tabs a[href="#sent"],
+.app[data-view="windows"] .tabs a[href="#windows"],
+.app[data-view="inbox"] .tabs a[href="#inbox"],
+.app[data-view="rejects"] .tabs a[href="#rejects"] {
+  background: var(--bg-secondary);
+  font-weight: var(--weight-strong);
+}
+.app[data-view]:not([data-view="peers"]) .tabs a[href="#peers"] {
+  background: transparent;
+  font-weight: var(--weight);
+}
 .page-body {
   padding: 0 var(--space-5) var(--space-5);
 }
@@ -764,6 +931,128 @@ tr.warn-row:focus { outline-color: var(--warning-fg); }
   cursor: pointer;
 }
 .alert-bar button:hover { background: #fff5f4; }
+
+tbody tr.letter-row { cursor: pointer; }
+tbody tr.letter-row.is-open {
+  outline: 2px solid var(--outline-selected);
+  outline-offset: -4px;
+  border-radius: var(--radius-row);
+}
+tbody tr.letter-row.is-open td { background: var(--bg); }
+.letter-pane {
+  display: none;
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(480px, calc(100vw - var(--sidebar)));
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+  z-index: 20;
+  flex-direction: column;
+  min-width: 0;
+  box-shadow: var(--shadow-100);
+}
+.letter-pane.open { display: flex; }
+.letter-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 48px;
+  padding: 0 16px 0 24px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 48px;
+}
+.letter-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: var(--weight-strong);
+  line-height: 25px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.letter-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 24px 24px;
+}
+.letter-meta {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  column-gap: 8px;
+  row-gap: 6px;
+  margin: 0 0 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  line-height: 16px;
+}
+.letter-meta dt { margin: 0; color: var(--text-secondary); font-size: 11px; }
+.letter-meta dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.letter-body { font-size: 13px; line-height: 22px; overflow-wrap: anywhere; }
+.letter-body p { margin: 0 0 12px; }
+.letter-body h1, .letter-body h2, .letter-body h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: var(--weight-strong);
+  line-height: 25px;
+}
+.letter-body h3 { font-size: 13px; line-height: 22px; }
+.letter-body ul { margin: 0 0 12px; padding-left: 20px; }
+.letter-body code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg-secondary);
+  padding: 1px 4px;
+  border-radius: var(--radius-s);
+}
+.letter-body pre {
+  margin: 0 0 12px;
+  padding: 12px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-m);
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: pre-wrap;
+}
+.letter-body pre code { background: transparent; padding: 0; }
+.letter-body a { color: var(--link); text-decoration: underline; }
+.letter-missing { color: var(--text-secondary); margin: 0 0 8px; }
+.letter-note { color: var(--text-secondary); font-size: 11px; line-height: 16px; margin: 12px 0 0; }
+.letter-atts { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.letter-atts h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: var(--weight-strong);
+  line-height: 22px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.letter-att {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  line-height: 16px;
+}
+.letter-att:last-child { border-bottom: 0; }
+.letter-att .name { font-weight: var(--weight-strong); }
+.letter-att .size { color: var(--text-secondary); font-size: 11px; margin-left: 8px; }
+.letter-att .path {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
 @media (max-width: 860px) {
   .app { display: block; }
   .sidebar {
@@ -788,6 +1077,7 @@ tr.warn-row:focus { outline-color: var(--warning-fg); }
   }
   .tabs, .page-body { padding-left: var(--space-3); padding-right: var(--space-3); }
   table { min-width: 640px; }
+  .letter-pane { width: 100vw; left: 0; }
 }
 """
 
@@ -836,12 +1126,13 @@ def _retry_note(item: dict) -> str:
     return "<div class='tiny'>" + " · ".join(bits) + "</div>"
 
 
-def _tr(key: str, css: str = "") -> str:
+def _tr(key: str, css: str = "", open_key: str = "") -> str:
     cls = f" class='{css}'" if css else ""
-    return f"<tr{cls} tabindex='-1' data-row='{_esc(key)}'>"
+    opened = f" data-open='{_esc(open_key)}'" if open_key else ""
+    return f"<tr{cls} tabindex='-1' data-row='{_esc(key)}'{opened}>"
 
 
-LIVE_JS = """(function () {
+LIVE_JS = r"""(function () {
   var INTERVAL = 5000;
   var lastOk = Date.now();
   var busy = false;
@@ -853,17 +1144,290 @@ LIVE_JS = """(function () {
     return !!(sel && !sel.isCollapsed && String(sel));
   }
 
+  function parseHash() {
+    var h = (location.hash || "").replace(/^#/, "");
+    var m = h.match(/^(inbox|sent|pending):(.+)$/);
+    return m ? {box: m[1], id: m[2]} : null;
+  }
+
+  function sectionOfHash() {
+    var h = (location.hash || "").replace(/^#/, "");
+    var box = h.split(":")[0];
+    if (["peers", "pending", "sent", "windows", "inbox", "rejects"].indexOf(box) >= 0) return box;
+    return "peers";
+  }
+
+  function syncNav() {
+    var app = document.querySelector(".app");
+    if (!app) return;
+    var box = sectionOfHash();
+    app.setAttribute("data-view", box);
+    app.classList.toggle("has-letter", !!parseHash());
+    var links = document.querySelectorAll("nav.side-nav a, .tabs a");
+    for (var i = 0; i < links.length; i++) {
+      var href = links[i].getAttribute("href") || "";
+      if (href.charAt(0) === "#") links[i].classList.toggle("active", href === "#" + box);
+    }
+    var rows = document.querySelectorAll("tr[data-open]");
+    var cur = parseHash();
+    var key = cur ? cur.box + ":" + cur.id : "";
+    for (var j = 0; j < rows.length; j++) {
+      rows[j].classList.toggle("is-open", rows[j].getAttribute("data-open") === key);
+    }
+  }
+
+  function paneEl() { return document.getElementById("letter-pane"); }
+  function paneScrollEl(pane) { return (pane && pane.querySelector(".letter-scroll")) || pane; }
+
+  function showPane(open) {
+    var pane = paneEl();
+    var ws = document.querySelector(".workspace");
+    if (!pane) return;
+    if (open) {
+      pane.classList.add("open");
+      pane.removeAttribute("hidden");
+      pane.setAttribute("aria-hidden", "false");
+      pane.style.display = "flex";
+      if (ws) ws.classList.add("letter-open");
+    } else {
+      pane.classList.remove("open");
+      pane.setAttribute("hidden", "");
+      pane.setAttribute("aria-hidden", "true");
+      pane.style.display = "none";
+      pane.removeAttribute("data-open");
+      if (ws) ws.classList.remove("letter-open");
+      var title = pane.querySelector(".letter-title");
+      var scroll = pane.querySelector(".letter-scroll");
+      if (title) title.textContent = "";
+      if (scroll) scroll.innerHTML = "";
+    }
+    syncNav();
+  }
+
+  function closeLetter() {
+    var cur = parseHash();
+    var box = cur ? cur.box : sectionOfHash();
+    var next = "#" + (box || "peers");
+    if ((location.hash || "") === next) applyLetterFromHash();
+    else location.hash = next;
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function inlineMd(s) {
+    s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+    s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/(^|[^\*])\*([^*]+)\*(?!\*)/g, "$1<em>$2</em>");
+    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, function (_, t, u) {
+      return '<a href="' + u + '" rel="noopener noreferrer" target="_blank">' + t + "</a>";
+    });
+    return s;
+  }
+
+  function simpleMd(text) {
+    var src = String(text || "").replace(/\r\n/g, "\n");
+    var chunks = [];
+    var re = /```([\s\S]*?)```/g;
+    var last = 0, m;
+    while ((m = re.exec(src))) {
+      if (m.index > last) chunks.push(["p", src.slice(last, m.index)]);
+      chunks.push(["pre", m[1].replace(/^\n/, "")]);
+      last = m.index + m[0].length;
+    }
+    if (last < src.length) chunks.push(["p", src.slice(last)]);
+    var html = "";
+    chunks.forEach(function (ch) {
+      if (ch[0] === "pre") {
+        html += "<pre><code>" + esc(ch[1]) + "</code></pre>";
+        return;
+      }
+      var blocks = ch[1].split(/\n{2,}/);
+      blocks.forEach(function (block) {
+        block = block.replace(/^\n+|\n+$/g, "");
+        if (!block) return;
+        var lines = block.split("\n");
+        if (lines.every(function (ln) { return /^[-*] /.test(ln); })) {
+          html += "<ul>" + lines.map(function (ln) {
+            return "<li>" + inlineMd(esc(ln.replace(/^[-*] /, ""))) + "</li>";
+          }).join("") + "</ul>";
+          return;
+        }
+        if (/^#{1,3} /.test(lines[0]) && lines.length === 1) {
+          var lvl = (lines[0].match(/^#+/) || ["#"])[0].length;
+          html += "<h" + lvl + ">" + inlineMd(esc(lines[0].replace(/^#{1,3} /, ""))) + "</h" + lvl + ">";
+          return;
+        }
+        html += "<p>" + lines.map(function (ln) { return inlineMd(esc(ln)); }).join("<br>") + "</p>";
+      });
+    });
+    return html || "<p></p>";
+  }
+
+  function row(dt, dd, mono) {
+    var out = document.createElement("div");
+    out.style.display = "contents";
+    var t = document.createElement("dt");
+    t.textContent = dt;
+    var d = document.createElement("dd");
+    if (mono) d.className = "mono";
+    d.textContent = dd == null || dd === "" ? "—" : String(dd);
+    out.appendChild(t);
+    out.appendChild(d);
+    return out;
+  }
+
+  function fillPane(data) {
+    var pane = paneEl();
+    if (!pane) return;
+    var title = pane.querySelector(".letter-title");
+    var scroll = pane.querySelector(".letter-scroll");
+    if (title) title.textContent = data.subject || "（无标题）";
+    if (!scroll) return;
+    scroll.innerHTML = "";
+    var meta = document.createElement("dl");
+    meta.className = "letter-meta";
+    var who = data.box === "inbox"
+      ? ((data.from_person || "") + (data.from ? "（" + data.from + "）" : "")).trim()
+      : ((data.to_member || data.to || "") + (data.to && data.to_member ? "（" + data.to + "）" : "")).trim();
+    meta.appendChild(row(data.box === "inbox" ? "来自" : "发给", who || "—"));
+    meta.appendChild(row("类型", data.type));
+    meta.appendChild(row("标题", data.subject || "—"));
+    meta.appendChild(row("时间", data.created));
+    var st = data.status_label || "—";
+    if (data.box === "inbox") st = (data.read_label || (data.read ? "已读" : "未读")) + (data.status_label && data.status_label !== "—" ? " · " + data.status_label : "");
+    else if (data.read_label && data.read_label !== st) st = data.read_label;
+    if (data.read_at && data.box === "inbox") st += "  " + String(data.read_at).replace("T", " ").slice(0, 16);
+    meta.appendChild(row("状态", st));
+    meta.appendChild(row("窗口", data.window || data.folder || "—"));
+    meta.appendChild(row("消息", data.id, true));
+    scroll.appendChild(meta);
+
+    var body = document.createElement("div");
+    body.className = "letter-body";
+    if (data.body_missing) {
+      var miss = document.createElement("p");
+      miss.className = "letter-missing";
+      miss.textContent = "正文已不在本机";
+      body.appendChild(miss);
+      if (data.body_path) {
+        var path = document.createElement("p");
+        path.className = "letter-note";
+        path.textContent = data.body_path;
+        body.appendChild(path);
+      }
+    } else {
+      var md = document.createElement("div");
+      md.innerHTML = simpleMd(data.body || "");
+      body.appendChild(md);
+      if (data.body_truncated) {
+        var note = document.createElement("p");
+        note.className = "letter-note";
+        note.textContent = "正文很长，这里只显示前面一部分。完整内容在：" + (data.body_path || "");
+        body.appendChild(note);
+      }
+    }
+    scroll.appendChild(body);
+
+    var atts = data.attachments || [];
+    if (atts.length) {
+      var box = document.createElement("div");
+      box.className = "letter-atts";
+      var h = document.createElement("h3");
+      var tmpl = document.getElementById("letter-att-icon");
+      if (tmpl) h.appendChild(tmpl.content.cloneNode(true));
+      var ht = document.createElement("span");
+      ht.textContent = "附件";
+      h.appendChild(ht);
+      box.appendChild(h);
+      atts.forEach(function (att) {
+        var item = document.createElement("div");
+        item.className = "letter-att";
+        var name = document.createElement("span");
+        name.className = "name";
+        name.textContent = att.name || "file";
+        item.appendChild(name);
+        var size = document.createElement("span");
+        size.className = "size";
+        size.textContent = (att.size || 0).toLocaleString() + " 字节";
+        item.appendChild(size);
+        var ap = document.createElement("span");
+        ap.className = "path";
+        ap.textContent = att.path || "";
+        item.appendChild(ap);
+        box.appendChild(item);
+      });
+      scroll.appendChild(box);
+    }
+  }
+
+  function loadLetter(box, id) {
+    var pane = paneEl();
+    if (!pane) return;
+    showPane(true);
+    pane.setAttribute("data-open", box + ":" + id);
+    var title = pane.querySelector(".letter-title");
+    var scroll = pane.querySelector(".letter-scroll");
+    if (title) title.textContent = "正在打开…";
+    if (scroll) scroll.innerHTML = "";
+    fetch("/local/letter?box=" + encodeURIComponent(box) + "&id=" + encodeURIComponent(id), {
+      cache: "no-store",
+      headers: {"X-Xlt-Panel": "1", Accept: "application/json"}
+    }).then(function (res) {
+      return res.json().then(function (data) { return {ok: res.ok, data: data}; });
+    }).then(function (out) {
+      var still = parseHash();
+      if (!still || still.box !== box || still.id !== id) return;
+      if (!out.ok || (out.data && out.data.error)) {
+        var msg = (out.data && out.data.error && out.data.error.message) || "打不开这封信";
+        fillPane({subject: "打不开", body_missing: true, body_path: msg, attachments: [], box: box, id: id});
+        return;
+      }
+      fillPane(out.data);
+      syncNav();
+      tick(true);
+    }).catch(function () {
+      var still = parseHash();
+      if (!still || still.box !== box || still.id !== id) return;
+      fillPane({subject: "打不开", body_missing: true, body_path: "读取失败", attachments: [], box: box, id: id});
+    });
+  }
+
+  function applyLetterFromHash() {
+    syncNav();
+    var cur = parseHash();
+    if (!cur) {
+      showPane(false);
+      return;
+    }
+    var pane = paneEl();
+    if (pane && pane.classList.contains("open") && pane.getAttribute("data-open") === cur.box + ":" + cur.id) {
+      var title = pane.querySelector(".letter-title");
+      if (title && title.textContent) return;
+    }
+    loadLetter(cur.box, cur.id);
+  }
+
   function snapshot() {
     var active = document.activeElement;
     var row = active && active.closest ? active.closest("tbody tr") : null;
     var side = document.querySelector(".sidebar");
+    var pane = paneEl();
+    var sc = paneScrollEl(pane);
     return {
       x: window.scrollX,
       y: window.scrollY,
       side: side ? side.scrollTop : 0,
       key: row ? row.getAttribute("data-row") : null,
       note: !!document.querySelector(".foot-note[open]"),
-      hash: location.hash
+      hash: location.hash,
+      letterOpen: !!(pane && pane.classList.contains("open")),
+      letterScroll: sc ? sc.scrollTop : 0
     };
   }
 
@@ -885,12 +1449,17 @@ LIVE_JS = """(function () {
     var side = document.querySelector(".sidebar");
     if (side) side.scrollTop = s.side;
     window.scrollTo(s.x, s.y);
+    var sc = paneScrollEl(paneEl());
+    if (sc && s.letterOpen) sc.scrollTop = s.letterScroll;
+    syncNav();
   }
 
   function markup(root) {
     var clone = root.cloneNode(true);
     var stamp = clone.querySelector("#live-stamp");
     if (stamp) stamp.textContent = "";
+    var pane = clone.querySelector("#letter-pane");
+    if (pane) pane.replaceChildren();
     return clone.innerHTML;
   }
 
@@ -933,9 +1502,29 @@ LIVE_JS = """(function () {
           return;
         }
         var s = snapshot();
+        var pane = paneEl();
+        var held = null;
+        var heldScroll = 0;
+        if (pane && pane.classList.contains("open")) {
+          held = pane;
+          heldScroll = (paneScrollEl(pane) || pane).scrollTop;
+          pane.remove();
+        }
         cur.replaceWith(next);
+        if (held) {
+          var fresh = document.getElementById("letter-pane");
+          if (fresh) fresh.replaceWith(held);
+          else {
+            var ws = document.querySelector(".workspace");
+            if (ws) ws.appendChild(held);
+          }
+          var sc = paneScrollEl(held);
+          if (sc) sc.scrollTop = heldScroll;
+        }
         if (doc.title) document.title = doc.title;
         restore(s);
+        if (!held) applyLetterFromHash();
+        else syncNav();
         paintStamp();
       })
       .catch(function () {})
@@ -959,6 +1548,21 @@ LIVE_JS = """(function () {
   }
 
   document.addEventListener("click", function (ev) {
+    var closer = ev.target && ev.target.closest ? ev.target.closest("[data-letter-close]") : null;
+    if (closer) {
+      ev.preventDefault();
+      closeLetter();
+      return;
+    }
+    var row = ev.target && ev.target.closest ? ev.target.closest("tr[data-open]") : null;
+    if (row && !(ev.target.closest && ev.target.closest("a,button,[data-copy]"))) {
+      var key = row.getAttribute("data-open") || "";
+      var cur = parseHash();
+      var now = cur ? cur.box + ":" + cur.id : "";
+      if (now === key) closeLetter();
+      else location.hash = "#" + key;
+      return;
+    }
     var cp = ev.target && ev.target.closest ? ev.target.closest("[data-copy]") : null;
     if (!cp) return;
     copyText(cp.getAttribute("data-copy")).then(function () {
@@ -967,6 +1571,24 @@ LIVE_JS = """(function () {
       setTimeout(function () { cp.classList.remove("copied"); cp.setAttribute("title", "复制完整指纹"); }, 1500);
     });
   });
+
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape") {
+      if (parseHash()) {
+        ev.preventDefault();
+        closeLetter();
+      }
+      return;
+    }
+    if (ev.key !== "Enter" || ev.repeat) return;
+    if (ev.target && ev.target.closest && ev.target.closest("input,textarea,button,a")) return;
+    var row = ev.target && ev.target.closest ? ev.target.closest("tr[data-open]") : null;
+    if (!row) return;
+    ev.preventDefault();
+    row.click();
+  });
+
+  window.addEventListener("hashchange", function () { applyLetterFromHash(); });
 
   document.addEventListener("click", function (ev) {
     var btn = ev.target && ev.target.closest ? ev.target.closest("[data-dismiss]") : null;
@@ -985,8 +1607,10 @@ LIVE_JS = """(function () {
   setInterval(function () { tick(false); }, INTERVAL);
   setInterval(paintStamp, 1000);
   paintStamp();
+  applyLetterFromHash();
 })();
 """
+
 
 
 BUILD = hashlib.sha1((CSS + LIVE_JS).encode("utf-8")).hexdigest()[:10]
@@ -1017,7 +1641,7 @@ def render(snap: dict) -> str:
     pend_rows = []
     for item in snap["pending"]:
         pend_rows.append(
-            f"{_tr('pend:' + str(item.get('id') or ''))}"
+            f"{_tr('pend:' + str(item.get('id') or ''), 'letter-row', 'pending:' + str(item.get('id') or ''))}"
             f"<td class='mono'>{_esc(item.get('id'))}</td>"
             f"<td>{_esc(item.get('to_member') or item.get('to'))}</td>"
             f"<td>{_esc(item.get('type'))}</td>"
@@ -1034,7 +1658,7 @@ def render(snap: dict) -> str:
     sent_rows = []
     for item in snap.get("sent") or []:
         sent_rows.append(
-            f"{_tr('sent:' + str(item.get('id') or ''))}"
+            f"{_tr('sent:' + str(item.get('id') or ''), 'letter-row', 'sent:' + str(item.get('id') or ''))}"
             f"<td class='mono'>{_esc(item.get('id'))}</td>"
             f"<td>{_esc(item.get('to_member'))}</td>"
             f"<td>{_esc(item.get('type'))}</td>"
@@ -1052,7 +1676,7 @@ def render(snap: dict) -> str:
     for item in snap["inbox"]:
         state = (item.get("state") or {}).get("status")
         in_rows.append(
-            f"{_tr('inbox:' + str(item.get('id') or ''))}"
+            f"{_tr('inbox:' + str(item.get('id') or ''), 'letter-row', 'inbox:' + str(item.get('id') or ''))}"
             f"<td class='mono'>{_esc(item.get('id'))}</td>"
             f"<td>{_esc(item.get('from_person'))}</td>"
             f"<td>{_esc(item.get('type'))}</td>"
@@ -1212,7 +1836,7 @@ def render(snap: dict) -> str:
     <header class="page-head">
       <div class="page-title">
         <h1>小灵通通讯员</h1>
-        <p class="sub">{_esc(snap.get('owner'))} 的这台电脑（{_esc(snap.get('me'))}）· 只显示信封，不显示正文 <span id="live-stamp" class="live-stamp"></span></p>
+        <p class="sub">{_esc(snap.get('owner'))} 的这台电脑（{_esc(snap.get('me'))}）· 点一封信可查看正文 <span id="live-stamp" class="live-stamp"></span></p>
       </div>
       <div class="stats">
         <div class="stat"><b>{_esc(snap.get('person'))}</b><span>人名</span></div>
@@ -1229,6 +1853,7 @@ def render(snap: dict) -> str:
       {_nav_link('inbox', '收到的信', None)}
       {_nav_link('rejects', '被拒记录', None)}
     </nav>
+    <div class="page-stage">
     <div class="page-body">
     <section id="peers">
       <h2>同事</h2>
@@ -1288,6 +1913,15 @@ def render(snap: dict) -> str:
       </div>
     </section>
     <p class="foot">TCP {_esc(snap.get('tcp_port'))} · UDP {_esc(snap.get('udp_port'))} · 本页只在这台电脑上（127.0.0.1:{_esc(snap.get('panel_port'))}）。启动于 {_esc(snap.get('started') or '—')}</p>
+    </div>
+    <aside id="letter-pane" class="letter-pane" hidden aria-hidden="true" style="position:fixed;top:0;right:0;bottom:0;width:min(480px,calc(100vw - 240px));background:#fff;border-left:1px solid #e6e6e6;z-index:20;flex-direction:column;min-width:0">
+      <header class="letter-head" style="display:flex;align-items:center;justify-content:space-between;gap:8px;height:48px;padding:0 16px 0 24px;border-bottom:1px solid #e6e6e6;flex:0 0 48px">
+        <h2 class="letter-title" style="margin:0;font-size:15px;font-weight:550;line-height:25px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></h2>
+        <button type="button" class="icon-btn" data-letter-close style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:0;background:transparent;color:inherit;cursor:pointer" title="关闭" aria-label="关闭">{icon("x")}</button>
+      </header>
+      <div class="letter-scroll" style="flex:1 1 auto;min-height:0;overflow:auto;padding:16px 24px 24px"></div>
+      <template id="letter-att-icon">{icon("paperclip", 16)}</template>
+    </aside>
     </div>
   </main>
 </div>

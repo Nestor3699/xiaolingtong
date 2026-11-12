@@ -295,6 +295,17 @@ class LocalHandler(BaseHTTPRequestHandler):
         if path == "/local/busy":
             self._send(200, engine.busy_info())
             return
+        if path == "/local/letter":
+            if not self._panel_guard():
+                return
+            from xlt.panel import letter_view
+
+            q = parse_qs(urlparse(self.path).query)
+            box = (q.get("box") or [""])[0]
+            msg_id = (q.get("id") or [""])[0]
+            view, code = letter_view(engine.home, box, msg_id)
+            self._send(code, view)
+            return
         self._send(404, {"error": {"code": "NOT_FOUND", "message": "没有这个地址"}})
 
     def do_POST(self):

@@ -101,7 +101,7 @@ def main() -> int:
     html = render(SNAP)
     required = (
         "小灵通通讯员",
-        "只显示信封，不显示正文",
+        "点一封信可查看正文",
         "同事",
         "待送达",
         "收信窗口",
@@ -125,6 +125,8 @@ def main() -> int:
             fail(f"状态页缺少：「{item}」")
     if CANARY in html or SECRET in html:
         fail("状态页泄漏了信纸正文或密钥")
+    if 'id="letter-pane"' not in html and "id='letter-pane'" not in html:
+        fail("状态页应有阅读面板")
     if "Figma" in html or "figma" in html:
         fail("状态页不应出现外部产品名")
     if "Inter" not in html:
