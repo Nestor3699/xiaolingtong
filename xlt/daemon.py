@@ -144,6 +144,11 @@ class PeerHandler(BaseHTTPRequestHandler):
             code, payload = engine.on_attach_status(member, msg_id, att_id, self._req())
             self._send(code, payload)
             return
+        if path == "/xlt/v1/receipt":
+            msg_id = (parse_qs(urlparse(self.path).query).get("id") or [""])[0]
+            code, payload = engine.on_receipt(member, msg_id, self._req())
+            self._send(code, payload)
+            return
         if path == "/xlt/v1/health":
             self._send(200, engine.health_body())
             return

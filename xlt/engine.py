@@ -11,7 +11,7 @@ import time
 import uuid
 from pathlib import Path
 
-from xlt import adapters
+from xlt import adapters, receipts
 from xlt.common import (
     LETTER_MAX,
     atomic_text,
@@ -74,6 +74,7 @@ class Engine:
         self.attach_locks: dict[str, threading.Lock] = {}
         self.attach_locks_mu = threading.Lock()
         self.seen: set[str] = set()
+        self._poll_guard = threading.Lock()
         self.procs: dict[str, subprocess.Popen] = {}
         self.executor = None
         self._load_seen()
@@ -255,6 +256,9 @@ class Engine:
         if _expired(env):
             return 410, _err("MESSAGE_EXPIRED", "这封信已经过了保留期", req_id), None
         sent = self._sent_match(env, member) if env.get("type") == "reply" else None
+        if sent:
+            # 对方回信了，当然是读过了。老版本对方不发回执，这是它们唯一能升到「已读」的路。
+            receipts.mark_read(self.home, env.get("in_reply_to"), to_member=member.get("name") or "", via="reply")
         decision = self.gate(member, env["type"], implicit=bool(sent))
         if not decision.allow:
             self._deny(member, env, decision.code, decision.message, req_id, action=env["type"])
@@ -573,6 +577,7 @@ class Engine:
         current["updated"] = now_iso()
         if "status" in state:
             current.setdefault("history", []).append([state["status"], current["updated"]])
+            receipts.stamp_read_if_needed(current, state["status"])
         write_json(env_path, env)
 
     def local_send(
@@ -767,6 +772,7 @@ class Engine:
                     except (OSError, json.JSONDecodeError):
                         env = env
                 self._delete_pending(env_path, env)
+                receipts.record_delivered(self.home, env)
                 self.event("delivered", env, http=code, source=source)
                 message = "对方已收下" if code == 202 else "对方已收过，已从待发箱移除"
                 if env.get("attachments"):
@@ -778,6 +784,7 @@ class Engine:
                     "message": message,
                     "to": env.get("to_member"),
                     "expires": _expires(env),
+                    "receipt": "stored",
                     "attach_progress": __import__("xlt.attach", fromlist=["progress_text"]).progress_text(env.get("attachments")),
                 }
             err = (parsed.get("error") or {}) if isinstance(parsed, dict) else {}
@@ -917,6 +924,84 @@ class Engine:
                 )
             path.unlink(missing_ok=True)
 
+    def on_receipt(self, member: dict, msg_id: str, req_id: str) -> tuple[int, dict]:
+        """只有原发信人的证书能问自己这封信的回执。"""
+        found = self._find_env(msg_id)
+        if found is None:
+            return 404, _err("NO_SUCH_MESSAGE", "这边没有这封信", req_id)
+        with self.home.lock():
+            env = json.loads(found.read_text(encoding="utf-8"))
+            if env.get("from") != member.get("name"):
+                return 404, _err("NO_SUCH_MESSAGE", "这边没有这封信", req_id)
+            view = receipts.receipt_view(self.home, found, env)
+            state = env.setdefault("state", {})
+            if view["state"] == "read" and not state.get("read_at") and view.get("read_at"):
+                state["read_at"] = view["read_at"]
+                write_json(found, env)
+        return 200, view
+
+    def _poll_receipts_async(self) -> None:
+        if not receipts.due(self.home):
+            return
+        if not self._poll_guard.acquire(blocking=False):
+            return
+
+        def run():
+            try:
+                self.poll_receipts()
+            except Exception as exc:
+                self.log(f"回执查询出错：{exc.__class__.__name__}")
+            finally:
+                self._poll_guard.release()
+
+        threading.Thread(target=run, name="xlt-receipts", daemon=True).start()
+
+    def poll_receipts(self) -> None:
+        for msg_id, rec in receipts.due(self.home):
+            member = member_by_name(self.home, rec.get("to_member"))
+            if member is None:
+                receipts.note_poll(self.home, msg_id, no_receipts=True, error="名单里已没有这个人")
+                continue
+            self._poll_one(msg_id, member)
+
+    def _poll_one(self, msg_id: str, member: dict) -> None:
+        trust_path = self.home.peers_dir / f"{member['name']}.crt"
+        try:
+            trust = trust_path.read_text(encoding="utf-8")
+        except OSError:
+            receipts.note_poll(self.home, msg_id, error="没有对方证书", retry_in=60)
+            return
+        for ip, port, _source in _candidates(self.home, member):
+            try:
+                code, body = request(
+                    ip, port, "GET", f"/xlt/v1/receipt?id={msg_id}", b"",
+                    self.cert, self.key_path, member.get("cert_sha256"), trust, 3,
+                )
+            except FingerprintMismatch:
+                continue
+            except OSError:
+                continue
+            parsed = _json_body(body)
+            err = (parsed.get("error") or {}) if isinstance(parsed, dict) else {}
+            if code == 200:
+                if parsed.get("state") == "read":
+                    receipts.note_poll(self.home, msg_id, state="read", read_at=parsed.get("read_at"))
+                    self.log(f"已读回执 id={msg_id} ← {member['name']}")
+                else:
+                    receipts.note_poll(self.home, msg_id)
+                return
+            if code == 404 and err.get("code") == "NOT_FOUND":
+                # 旧版本通讯员没有这个地址：不再问，这封信停在「已送达」。
+                receipts.note_poll(self.home, msg_id, no_receipts=True, error="对方版本不支持回执")
+                self.log(f"{member['name']} 的通讯员版本较旧，不支持已读回执，这封信停在「已送达」 id={msg_id}")
+                return
+            if code == 404 and err.get("code") == "NO_SUCH_MESSAGE":
+                receipts.note_poll(self.home, msg_id, no_receipts=True, error="对方那边找不到这封信")
+                return
+            receipts.note_poll(self.home, msg_id, error=f"HTTP {code}", retry_in=30)
+            return
+        receipts.note_poll(self.home, msg_id, error="连不上对方", retry_in=30)
+
     def on_read(self, member: dict, path: str, req_id: str) -> tuple[int, dict]:
         decision = self.gate(member, "read", path=path)
         self.audit(
@@ -955,6 +1040,7 @@ class Engine:
         self._expire_inbox()
         self._downgrade_stale_peers()
         self.flush_due()
+        self._poll_receipts_async()
 
     def _expire_pending(self) -> None:
         for path in list(_active_pending(self.home)):

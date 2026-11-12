@@ -43,23 +43,36 @@ def env_with(extra: dict | None = None) -> dict:
     return merged
 
 
-def xlt(home: Path, *args: str, env: dict | None = None, timeout: int = 120) -> subprocess.CompletedProcess:
+def xlt(home: Path, *args: str, env: dict | None = None, timeout: int = 120, cwd: Path | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(
         [PY, "-m", "xlt", "--home", str(home), *args],
         capture_output=True,
         text=True,
         env=env_with(env),
         timeout=timeout,
+        cwd=str(cwd) if cwd else None,
     )
 
 
+def old_release(work: Path, rev: str = "9d45baf") -> Path:
+    """把已经发给同事的旧版本代码取出来，用来验证新旧能互通。"""
+    dest = work / f"old-{rev}"
+    if dest.exists():
+        return dest
+    dest.mkdir(parents=True)
+    arch = subprocess.run(["git", "-C", str(REPO), "archive", rev], capture_output=True, check=True)
+    subprocess.run(["tar", "-x", "-C", str(dest)], input=arch.stdout, check=True)
+    return dest
+
+
 class Proc:
-    def __init__(self, work: Path, name: str, args: list[str], env: dict | None = None):
+    def __init__(self, work: Path, name: str, args: list[str], env: dict | None = None, cwd: Path | None = None):
         self.name = name
         self.log_path = work / f"{name}.out"
         self.log = open(self.log_path, "a", encoding="utf-8")
         self.p = subprocess.Popen(
-            args, stdout=self.log, stderr=subprocess.STDOUT, start_new_session=True, env=env_with(env)
+            args, stdout=self.log, stderr=subprocess.STDOUT, start_new_session=True, env=env_with(env),
+            cwd=str(cwd) if cwd else None,
         )
 
     def kill(self) -> None:
@@ -92,6 +105,7 @@ class Node:
         self.proc: Proc | None = None
         self.peer_udp = 0
         self.env: dict = {}
+        self.cwd: Path | None = None  # 跑旧版本代码时指到旧代码目录
 
     def init(self) -> None:
         r = xlt(self.home, "init", "--me", self.me, "--person", self.person, "--owner", self.owner)
@@ -119,7 +133,7 @@ class Node:
         return args
 
     def start(self) -> None:
-        self.proc = Proc(self.work, self.person, self.serve_args(), self.env)
+        self.proc = Proc(self.work, self.person, self.serve_args(), self.env, self.cwd)
         wait_for(lambda: self.panel_ok(), 15, f"{self.me} 的状态页没起来")
 
     def crash(self) -> None:
@@ -127,6 +141,17 @@ class Node:
             self.proc.kill()
             self.proc = None
         time.sleep(0.5)
+
+    def cli(self, *args: str, timeout: int = 120) -> subprocess.CompletedProcess:
+        return xlt(self.home, *args, env=self.env, timeout=timeout, cwd=self.cwd)
+
+    def use_old(self, old: Path) -> None:
+        self.env = {"PYTHONPATH": str(old)}
+        self.cwd = old
+
+    def use_new(self) -> None:
+        self.env = {}
+        self.cwd = None
 
     def panel_ok(self) -> bool:
         try:

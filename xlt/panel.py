@@ -6,6 +6,7 @@ import html
 import json
 from pathlib import Path
 
+from xlt import receipts
 from xlt.common import envelope_summary, read_json
 from xlt.store import Home, load_cache, load_config, load_directory, load_routes, load_windows
 
@@ -27,6 +28,8 @@ LABELS = {
     "delivering": "正在交给 AI",
     "accepted": "已收下",
     "receiving": "正在收附件",
+    "receipt_stored": "已送达",
+    "receipt_read": "已读",
 }
 
 
@@ -85,6 +88,9 @@ def _inbox_rows(home: Home) -> list[dict]:
             continue
         item = envelope_summary(env)
         item["folder"] = path.parent.name
+        read, read_at, _via = receipts.read_info(home, path, env)
+        item["read"] = read
+        item["read_at"] = read_at
         rows.append(item)
     rows.sort(key=lambda item: item.get("created") or "", reverse=True)
     return rows
@@ -115,6 +121,46 @@ def window_liveness(home: Home, window: dict) -> str:
             return "失效"
         return "ok"
     return window.get("state") or "ok"
+
+
+def _sent_rows(home: Home, all_pending: list[dict], limit: int = 40) -> list[dict]:
+    """已发出的信：待送达 / 已送达 / 已读 / 失败 / 过期。信封信息来自 sent.jsonl，状态来自待发箱和回执表。"""
+    boxes = {row.get("id"): row for row in all_pending}
+    marks = receipts.all_items(home)
+    rows = []
+    for row in reversed(_jsonl_tail(home.root / "sent.jsonl", limit)):
+        msg_id = row.get("id")
+        item = {
+            "id": msg_id,
+            "to_member": row.get("to_member"),
+            "type": row.get("type"),
+            "subject": row.get("subject"),
+            "created": row.get("created") or row.get("ts"),
+            "detail": "",
+        }
+        waiting = boxes.get(msg_id)
+        if waiting:
+            item["status"] = "pending" if waiting["box"] == "pending" else waiting["box"]
+            if waiting.get("attach_progress"):
+                item["detail"] = waiting["attach_progress"]
+        else:
+            mark = marks.get(msg_id) or {}
+            if mark.get("state") == "read":
+                item["status"] = "receipt_read"
+                item["detail"] = f"已读 {_short_time(mark.get('read_at'))}"
+            else:
+                item["status"] = "receipt_stored"
+                if mark.get("delivered_at"):
+                    item["detail"] = f"送达 {_short_time(mark.get('delivered_at'))}"
+                if mark.get("no_receipts"):
+                    item["detail"] += "（对方版本较旧，没有已读回执）" if item["detail"] else "对方版本较旧，没有已读回执"
+        rows.append(item)
+    return rows
+
+
+def _short_time(value) -> str:
+    text = str(value or "")
+    return text[5:16].replace("T", " ") if len(text) >= 16 else text
 
 
 def collect(home: Home) -> dict:
@@ -195,6 +241,7 @@ def collect(home: Home) -> dict:
         "on_window_lost": routes.get("on_window_lost") or "fallback_default",
         "peers": peers,
         "pending": active,
+        "sent": _sent_rows(home, pending),
         "pending_failed": [row for row in pending if row["box"] != "pending"][-10:],
         "inbox": _inbox_rows(home)[:30],
         "windows": windows,
@@ -343,6 +390,7 @@ nav.side-nav a.active,
 .app:not(:has(:target)) nav.side-nav a[href="#peers"],
 .app:has(#peers:target) nav.side-nav a[href="#peers"],
 .app:has(#pending:target) nav.side-nav a[href="#pending"],
+.app:has(#sent:target) nav.side-nav a[href="#sent"],
 .app:has(#windows:target) nav.side-nav a[href="#windows"],
 .app:has(#inbox:target) nav.side-nav a[href="#inbox"],
 .app:has(#rejects:target) nav.side-nav a[href="#rejects"] {
@@ -350,6 +398,7 @@ nav.side-nav a.active,
   font-weight: var(--weight-strong);
 }
 .app:has(#pending:target) nav.side-nav a[href="#peers"],
+.app:has(#sent:target) nav.side-nav a[href="#peers"],
 .app:has(#windows:target) nav.side-nav a[href="#peers"],
 .app:has(#inbox:target) nav.side-nav a[href="#peers"],
 .app:has(#rejects:target) nav.side-nav a[href="#peers"] {
@@ -450,6 +499,7 @@ main.workspace {
 .workspace:not(:has(:target)) .tabs a[href="#peers"],
 .workspace:has(#peers:target) .tabs a[href="#peers"],
 .workspace:has(#pending:target) .tabs a[href="#pending"],
+.workspace:has(#sent:target) .tabs a[href="#sent"],
 .workspace:has(#windows:target) .tabs a[href="#windows"],
 .workspace:has(#inbox:target) .tabs a[href="#inbox"],
 .workspace:has(#rejects:target) .tabs a[href="#rejects"] {
@@ -457,6 +507,7 @@ main.workspace {
   font-weight: var(--weight-strong);
 }
 .workspace:has(#pending:target) .tabs a[href="#peers"],
+.workspace:has(#sent:target) .tabs a[href="#peers"],
 .workspace:has(#windows:target) .tabs a[href="#peers"],
 .workspace:has(#inbox:target) .tabs a[href="#peers"],
 .workspace:has(#rejects:target) .tabs a[href="#peers"] {
@@ -539,7 +590,8 @@ tbody tr:focus td { background: var(--bg); }
   line-height: 16px;
   white-space: nowrap;
 }
-.badge.online, .badge.replied, .badge.done, .badge.accepted { background: var(--success-bg); color: var(--success-fg); }
+.badge.online, .badge.replied, .badge.done, .badge.accepted, .badge.receipt_read { background: var(--success-bg); color: var(--success-fg); }
+.badge.receipt_stored { background: var(--bg-selected); color: var(--link); }
 .badge.offline, .badge.no_reply { background: var(--bg-secondary); color: var(--neutral-fg); }
 .badge.awaiting_manual, .badge.queued, .badge.pending, .badge.delivering, .badge.receiving { background: var(--warning-bg); color: var(--warning-fg); }
 .badge.failed, .badge.egress_blocked, .badge.unreachable, .badge.declined, .badge.expired { background: var(--danger-bg); color: var(--danger-fg); }
@@ -753,6 +805,22 @@ def render(snap: dict) -> str:
     if not pend_rows:
         pend_rows.append(f"{_tr('empty-pending')}<td colspan='7' class='muted'>没有待送达的信。</td></tr>")
 
+    sent_rows = []
+    for item in snap.get("sent") or []:
+        sent_rows.append(
+            f"{_tr('sent:' + str(item.get('id') or ''))}"
+            f"<td class='mono'>{_esc(item.get('id'))}</td>"
+            f"<td>{_esc(item.get('to_member'))}</td>"
+            f"<td>{_esc(item.get('type'))}</td>"
+            f"<td>{_esc(item.get('subject') or '—')}</td>"
+            f"<td>{_badge(item.get('status'))}"
+            f"{('<div class=tiny>' + _esc(item['detail']) + '</div>') if item.get('detail') else ''}</td>"
+            f"<td class='tiny'>{_esc(_short_time(item.get('created')))}</td>"
+            "</tr>"
+        )
+    if not sent_rows:
+        sent_rows.append(f"{_tr('empty-sent')}<td colspan='6' class='muted'>还没有发出过信。</td></tr>")
+
     in_rows = []
     for item in snap["inbox"]:
         state = (item.get("state") or {}).get("status")
@@ -763,7 +831,8 @@ def render(snap: dict) -> str:
             f"<td>{_esc(item.get('type'))}</td>"
             f"<td>{_esc(item.get('subject') or '—')}</td>"
             f"<td>{_esc((item.get('state') or {}).get('routed_to') or item.get('folder'))}</td>"
-            f"<td>{_badge(state)}</td>"
+            f"<td>{_badge(state)}"
+            f"{('<div class=tiny>已读 ' + _esc(_short_time(item.get('read_at'))) + '</div>') if item.get('read') else '<div class=tiny>还没读</div>'}</td>"
             f"<td>{_esc(item.get('letter_bytes'))} 字节</td>"
             "</tr>"
         )
@@ -828,6 +897,7 @@ def render(snap: dict) -> str:
     <nav class="side-nav">
       {_nav_link('peers', '同事', str(online))}
       {_nav_link('pending', '待送达', str(len(snap['pending'])))}
+      {_nav_link('sent', '已发出', str(len(snap.get('sent') or [])))}
       {_nav_link('windows', '收信窗口', str(len(snap['windows'])))}
       {_nav_link('inbox', '收到的信', str(len(snap['inbox'])))}
       {_nav_link('rejects', '被拒记录', str(len(snap['rejects'])))}
@@ -855,6 +925,7 @@ def render(snap: dict) -> str:
     <nav class="tabs" aria-label="页面分区">
       {_nav_link('peers', '同事', None)}
       {_nav_link('pending', '待送达', None)}
+      {_nav_link('sent', '已发出', None)}
       {_nav_link('windows', '收信窗口', None)}
       {_nav_link('inbox', '收到的信', None)}
       {_nav_link('rejects', '被拒记录', None)}
@@ -876,6 +947,16 @@ def render(snap: dict) -> str:
         <table>
           <thead><tr><th>消息</th><th>发给</th><th>类型</th><th>标题</th><th>状态</th><th>已试</th><th>大小</th></tr></thead>
           <tbody>{''.join(pend_rows)}</tbody>
+        </table>
+      </div>
+    </section>
+    <section id="sent">
+      <h2>已发出</h2>
+      <p class="hint">已送达 = 对方电脑上的通讯员收下了；已读 = 对方的 AI 真的取走看了。对方是旧版本时没有已读回执，会一直停在已送达。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>消息</th><th>发给</th><th>类型</th><th>标题</th><th>状态</th><th>发出时间</th></tr></thead>
+          <tbody>{''.join(sent_rows)}</tbody>
         </table>
       </div>
     </section>
