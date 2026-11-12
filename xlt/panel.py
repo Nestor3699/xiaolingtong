@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 from pathlib import Path
@@ -284,7 +285,7 @@ BADGE_ICONS = {
 def _badge(state: str | None) -> str:
     text = label(state)
     kind = state or "offline"
-    lead = icon(BADGE_ICONS[kind], 12) if kind in BADGE_ICONS else ""
+    lead = icon(BADGE_ICONS[kind], 12, 'margin-right:4px;') if kind in BADGE_ICONS else ""
     return f'<span class="badge { _esc(kind) }">{lead}{_esc(text)}</span>'
 
 
@@ -777,7 +778,7 @@ tr.warn-row:focus { outline-color: var(--warning-fg); }
   .brand { height: auto; padding: var(--space-2) 4px; flex: none; }
   nav.side-nav { flex-direction: row; flex-wrap: wrap; }
   .sidebar-foot { margin-top: var(--space-3); }
-  .kv-row { grid-template-columns: 72px minmax(0, 1fr); }
+  .kv-row { --kv-label: 72px; }
   .page-head {
     height: auto;
     flex-direction: column;
@@ -806,7 +807,7 @@ def _nav_link(anchor: str, title: str, count: str | None = None, active: bool = 
     badge = f'<span class="count">{_esc(count)}</span>' if count is not None else ""
     cls = ' class="active"' if active else ""
     lead = icon(NAV_ICONS[anchor]) if with_icon and anchor in NAV_ICONS else ""
-    return f'<a href="#{_esc(anchor)}"{cls}><span class="nav-label">{lead}<span>{_esc(title)}</span></span>{badge}</a>'
+    return f'<a href="#{_esc(anchor)}"{cls}><span class="nav-label" style="display:inline-flex;align-items:center;gap:8px;min-width:0">{lead}<span>{_esc(title)}</span></span>{badge}</a>'
 
 
 def _progress_bar(item: dict) -> str:
@@ -912,6 +913,17 @@ LIVE_JS = """(function () {
       .then(function (text) {
         if (!force && selecting()) return;
         var doc = new DOMParser().parseFromString(text, "text/html");
+        var nb = doc.querySelector('meta[name="xlt-build"]');
+        var mine = document.querySelector('meta[name="xlt-build"]');
+        if (nb && mine && nb.content !== mine.content) {
+          // 通讯员升级了：样式表和脚本都要换，只换内容会得到「新内容 + 旧样式」。整页刷新一次。
+          var last = Number(sessionStorage.getItem("xlt-reload") || 0);
+          if (Date.now() - last > 20000) {
+            sessionStorage.setItem("xlt-reload", String(Date.now()));
+            location.reload();
+            return;
+          }
+        }
         var next = doc.querySelector(".app");
         var cur = document.querySelector(".app");
         if (!next || !cur) return;
@@ -975,6 +987,9 @@ LIVE_JS = """(function () {
   paintStamp();
 })();
 """
+
+
+BUILD = hashlib.sha1((CSS + LIVE_JS).encode("utf-8")).hexdigest()[:10]
 
 
 def render(snap: dict) -> str:
@@ -1115,19 +1130,19 @@ def render(snap: dict) -> str:
     if full_fp:
         fp_cell = (
             f'<span class="mono" title="{_esc(full_fp)}">{_esc(":".join(full_fp.upper().split(":")[:4]))}…</span>'
-            f'<button type="button" class="icon-btn" data-copy="{_esc(full_fp)}" title="复制完整指纹" aria-label="复制完整指纹">{icon("copy", 14)}</button>'
+            f'<button type="button" class="icon-btn" style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:0;background:transparent;color:inherit;cursor:pointer" data-copy="{_esc(full_fp)}" title="复制完整指纹" aria-label="复制完整指纹">{icon("copy", 14)}</button>'
         )
     else:
         fp_cell = "—"
     started = _short_time(snap.get("started")) if snap.get("started") else ""
     if snap.get("gateway_running", True):
         gateway_cell = (
-            '<div class="stack"><span><span class="dot ok"></span> 运行中</span>'
-            + (f'<span class="sub">启动于 {_esc(started)}</span>' if started else "")
+            '<div class="stack" style="display:flex;flex-direction:column;align-items:flex-start"><span><span class="dot ok" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#14ae5c"></span> 运行中</span>'
+            + (f'<span class="sub" style="font-size:11px">启动于 {_esc(started)}</span>' if started else "")
             + "</div>"
         )
     else:
-        gateway_cell = '<span><span class="dot off"></span> 没在运行</span>'
+        gateway_cell = '<span><span class="dot off" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#f24822"></span> 没在运行</span>'
     upd = snap.get("update") or {}
     result_text = {
         "updated": "刚更新成功", "up_to_date": "已是最新", "rolled_back": "更新失败，已退回",
@@ -1136,8 +1151,8 @@ def render(snap: dict) -> str:
         "deferred": "在传文件，稍后更新", "error": "检查失败（没网？）", "unsupported": "这份安装不能自动更新",
     }.get(upd.get("result") or "", "还没检查过")
     update_cell = (
-        f'<div class="stack"><span>自动更新 {"开" if upd.get("auto", True) else "关"}</span>'
-        f'<span class="sub" title="{_esc(upd.get("message"))}">{_esc(result_text)}'
+        f'<div class="stack" style="display:flex;flex-direction:column;align-items:flex-start"><span>自动更新 {"开" if upd.get("auto", True) else "关"}</span>'
+        f'<span class="sub" style="font-size:11px" title="{_esc(upd.get("message"))}">{_esc(result_text)}'
         + (f" · {_esc(upd.get('last_check_short'))}" if upd.get("last_check_short") else "")
         + "</span></div>"
     )
@@ -1148,6 +1163,7 @@ def render(snap: dict) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="xlt-build" content="{BUILD}">
 <title>小灵通通讯员 · {_esc(owner)}</title>
 <style>
 {CSS}
@@ -1155,6 +1171,7 @@ def render(snap: dict) -> str:
 </head>
 <body>
 <div class="app">
+  <link rel="stylesheet" href="/local/panel.css?v={BUILD}">
   <aside class="sidebar">
     <div class="brand">
       <div class="mark" aria-hidden="true">灵</div>
@@ -1174,17 +1191,17 @@ def render(snap: dict) -> str:
     <div class="sidebar-foot">
       <div class="foot-title">本机</div>
       <dl class="kv">
-        <div class="kv-row"><dt>{icon('laptop')}<span>机器名</span></dt><dd>{_esc(snap.get('me') or '—')}</dd></div>
-        <div class="kv-row"><dt>{icon('users')}<span>主人</span></dt><dd>{_esc(snap.get('owner') or '—')} · {_esc(snap.get('person') or '—')}</dd></div>
-        <div class="kv-row"><dt>{icon('network')}<span>地址</span></dt><dd class="mono">{_esc(snap.get('ip') or '—')}</dd></div>
-        <div class="kv-row"><dt>{icon('fingerprint-pattern')}<span>指纹</span></dt><dd>{fp_cell}</dd></div>
-        <div class="kv-row"><dt>{icon('activity')}<span>网关</span></dt><dd>{gateway_cell}</dd></div>
-        <div class="kv-row"><dt>{icon('plug')}<span>端口</span></dt><dd class="stack mono"><span>TCP {_esc(snap.get('tcp_port'))}</span><span>UDP {_esc(snap.get('udp_port'))}</span></dd></div>
-        <div class="kv-row"><dt>{icon('info')}<span>版本</span></dt><dd><div class="stack"><span>{_esc(snap.get('version') or '—')}{(' · <span class="mono">' + _esc(upd.get('commit_short')) + '</span>') if upd.get('commit_short') else ''}</span></div></dd></div>
-        <div class="kv-row"><dt>{icon('refresh-cw')}<span>更新</span></dt><dd>{update_cell}</dd></div>
+        <div class="kv-row" style="display:grid;grid-template-columns:var(--kv-label,64px) minmax(0,1fr);align-items:center;column-gap:4px"><dt style="display:flex;align-items:center;gap:6px;margin:0;white-space:nowrap">{icon('laptop')}<span>机器名</span></dt><dd style="display:flex;align-items:center;gap:4px;margin:0;min-width:0">{_esc(snap.get('me') or '—')}</dd></div>
+        <div class="kv-row" style="display:grid;grid-template-columns:var(--kv-label,64px) minmax(0,1fr);align-items:center;column-gap:4px"><dt style="display:flex;align-items:center;gap:6px;margin:0;white-space:nowrap">{icon('users')}<span>主人</span></dt><dd style="display:flex;align-items:center;gap:4px;margin:0;min-width:0">{_esc(snap.get('owner') or '—')} · {_esc(snap.get('person') or '—')}</dd></div>
+        <div class="kv-row" style="display:grid;grid-template-columns:var(--kv-label,64px) minmax(0,1fr);align-items:center;column-gap:4px"><dt style="display:flex;align-items:center;gap:6px;margin:0;white-space:nowrap">{icon('network')}<span>地址</span></dt><dd class="mono" style="display:flex;align-items:center;gap:4px;margin:0;min-width:0">{_esc(snap.get('ip') or '—')}</dd></div>
+        <div class="kv-row" style="display:grid;grid-template-columns:var(--kv-label,64px) minmax(0,1fr);align-items:center;column-gap:4px"><dt style="display:flex;align-items:center;gap:6px;margin:0;white-space:nowrap">{icon('fingerprint-pattern')}<span>指纹</span></dt><dd style="display:flex;align-items:center;gap:4px;margin:0;min-width:0">{fp_cell}</dd></div>
+        <div class="kv-row" style="display:grid;grid-template-columns:var(--kv-label,64px) minmax(0,1fr);align-items:center;column-gap:4px"><dt style="display:flex;align-items:center;gap:6px;margin:0;white-space:nowrap">{icon('activity')}<span>网关</span></dt><dd style="display:flex;align-items:center;gap:4px;margin:0;min-width:0">{gateway_cell}</dd></div>
+        <div class="kv-row" style="display:grid;grid-template-columns:var(--kv-label,64px) minmax(0,1fr);align-items:center;column-gap:4px"><dt style="display:flex;align-items:center;gap:6px;margin:0;white-space:nowrap">{icon('plug')}<span>端口</span></dt><dd class="stack mono" style="display:flex;flex-direction:column;align-items:flex-start;margin:0;min-width:0"><span>TCP {_esc(snap.get('tcp_port'))}</span><span>UDP {_esc(snap.get('udp_port'))}</span></dd></div>
+        <div class="kv-row" style="display:grid;grid-template-columns:var(--kv-label,64px) minmax(0,1fr);align-items:center;column-gap:4px"><dt style="display:flex;align-items:center;gap:6px;margin:0;white-space:nowrap">{icon('info')}<span>版本</span></dt><dd style="display:flex;align-items:center;gap:4px;margin:0;min-width:0"><div class="stack" style="display:flex;flex-direction:column;align-items:flex-start"><span>{_esc(snap.get('version') or '—')}{(' · <span class="mono">' + _esc(upd.get('commit_short')) + '</span>') if upd.get('commit_short') else ''}</span></div></dd></div>
+        <div class="kv-row" style="display:grid;grid-template-columns:var(--kv-label,64px) minmax(0,1fr);align-items:center;column-gap:4px"><dt style="display:flex;align-items:center;gap:6px;margin:0;white-space:nowrap">{icon('refresh-cw')}<span>更新</span></dt><dd style="display:flex;align-items:center;gap:4px;margin:0;min-width:0">{update_cell}</dd></div>
       </dl>
       <details class="foot-note">
-        <summary>{icon('chevron-right', 14)}<span>睡醒检测</span></summary>
+        <summary style="display:flex;align-items:center;gap:6px;list-style:none;cursor:pointer">{icon('chevron-right', 14)}<span>睡醒检测</span></summary>
         <p>{_esc(snap.get('wake_note') or '睡醒检测说明还没写上。')}</p>
       </details>
       <div class="foot-meta">本页只在这台电脑上<br><span class="mono">127.0.0.1:{_esc(snap.get('panel_port'))}</span></div>

@@ -291,3 +291,13 @@ auth.css `:root`：
 - 自动更新或退回之后，页面顶部出现一条不挡操作的提示条（和证书替换提示条同一个位置、同一套样式，只是颜色不同）：成功是绿色（`refresh-cw` 图标），失败退回是黄色（`triangle-exclamation-point` 图标）。点「知道了」才收起，重启后不会自己消失，也不会因为 5 秒刷新而消失。
 - 颜色沿用第 2 节的语义色：绿 = success，黄 = warning。不新增颜色。
 - 截图（夹具数据，`e2e/panel_screens.py` 生成）：`/workspace/xlt-ui/v3-sidebar.png`、`v3-banner-updated.png`、`v3-banner-rollback.png`。
+
+## 11. 开着的旧页面不能乱（v4）
+
+状态页每 5 秒只把 `.app` 里的内容换成新的，`<head>` 里的样式表不会换。通讯员升级后，浏览器里开着的旧页面会得到「新内容 + 旧样式」，图标和文字错位、TCP/UDP 连成一串。规则：
+
+- 样式表同时通过 `GET /local/panel.css?v=<版本>` 提供，并且 `<link>` 放在 `.app` 里面的最前面：旧页面换内容时会一起把新样式表带进来。
+- 页面带 `<meta name="xlt-build">`（样式表 + 脚本的哈希）。新脚本发现版本变了，整页刷新一次（20 秒内不重复刷新，防止循环）。
+- 关键布局直接写在元素上（内联样式）：图标的 `width/height/display/vertical-align`、导航里图标和文字的 flex 和间距、本机块的两列（`grid-template-columns: var(--kv-label,64px) 1fr`）、TCP/UDP 与网关的分行（`flex-direction:column`）、复制按钮 22×22、睡醒检测 `summary` 的 `display:flex; list-style:none`（只剩一个小三角）。样式表完全不生效时，这些也不乱。
+- 本地接口的响应带 `Cache-Control: no-store`。
+- 验证：`e2e/panel_stale_e2e.py`（真通讯员 + 真浏览器：旧版本页面遇上升级、样式变了自动刷新、没有样式表时的布局）。截图：`/workspace/xlt-ui/v4-*.png`（Chromium 和 WebKit，前后对比）。

@@ -847,6 +847,8 @@ class Scheduler:
                 self.log("上次更新没做完，接着验证新版本")
                 spawn_detached(self.home, resume=True)
                 return
+        if os.environ.get("XLT_UPDATE_DISABLE") == "1":
+            return  # 端到端测试用：测试里的通讯员不许去碰真实的 GitHub 和真实的代码目录
         cfg = load_config(self.home)
         if not cfg.get("auto_update", True):
             self.next_check = max(self.next_check, now + 60)

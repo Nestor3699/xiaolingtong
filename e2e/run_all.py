@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
@@ -25,6 +26,7 @@ SUITE = [
     ("pi_reply_e2e", "pi 回信"),
     ("panel_render_e2e", "状态页文案、图标、侧栏底部，不显示正文"),
     ("panel_live_e2e", "状态页原地更新、不整页刷新"),
+    ("panel_stale_e2e", "开着的旧页面遇到升级后的通讯员：样式跟着更新，布局不乱"),
     ("netinfo_check", "网卡与广播地址选择"),
     ("outbox_e2e", "待送达：重启后继续重试，上线即补发"),
     ("receipts_e2e", "已送达 / 已读回执，旧版对方停在已送达"),
@@ -36,6 +38,7 @@ SUITE = [
 
 
 def main() -> int:
+    os.environ["XLT_UPDATE_DISABLE"] = "1"  # 子脚本里的通讯员不去碰真实 GitHub；update_e2e 自己覆盖
     wanted = set(sys.argv[1:])
     suite = [item for item in SUITE if not wanted or item[0] in wanted]
     LOGS.mkdir(parents=True, exist_ok=True)

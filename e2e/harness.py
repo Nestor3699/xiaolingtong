@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parent
 REPO = ROOT.parent
 PY = sys.executable
 os.environ["PYTHONPATH"] = str(REPO)
+os.environ.setdefault("XLT_UPDATE_DISABLE", "1")  # 测试里的通讯员不自动更新（update_e2e 自己设成 0）
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 

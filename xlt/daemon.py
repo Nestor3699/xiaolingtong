@@ -249,6 +249,7 @@ class LocalHandler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(data)
@@ -285,6 +286,11 @@ class LocalHandler(BaseHTTPRequestHandler):
             return
         if path in ("/api/panel", "/local/status"):
             self._send(200, collect(engine.home))
+            return
+        if path == "/local/panel.css":
+            from xlt.panel import CSS
+
+            self._send(200, CSS, "text/css; charset=utf-8")
             return
         if path == "/local/busy":
             self._send(200, engine.busy_info())

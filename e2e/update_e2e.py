@@ -154,6 +154,7 @@ class Upstream:
 def base_env(install: Path, extra: dict | None = None) -> dict:
     env = {
         "PYTHONPATH": str(install),     # 关键：永远指向一次性副本，绝不能指到真实仓库
+        "XLT_UPDATE_DISABLE": "0",
         "XLT_UPDATE_PIP": "skip",
         "XLT_UPDATE_MIN_GAP_S": "0",
         "XLT_UPDATE_HEALTH_S": "40",

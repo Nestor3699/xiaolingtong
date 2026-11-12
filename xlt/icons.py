@@ -32,11 +32,15 @@ PATHS = {
 }
 
 
-def icon(name: str, size: int = 16) -> str:
-    """返回一段内联 <svg>。颜色跟随文字颜色（currentColor）。"""
+def icon(name: str, size: int = 16, extra_style: str = "") -> str:
+    """返回一段内联 <svg>。颜色跟随文字颜色（currentColor）。
+
+    大小、display、对齐都直接写在元素上（不只靠样式表）：浏览器里开着的旧页面只会换新内容、
+    不会换样式表，样式表缺了这些规则时，图标也不会撑成默认大小或掉到基线下面。"""
     inner = PATHS[name]
     return (
         f'<svg class="ic" width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" '
+        f'style="display:inline-block;flex:0 0 auto;width:{size}px;height:{size}px;vertical-align:-0.15em;{extra_style}" '
         f'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
         f'aria-hidden="true">{inner}</svg>'
     )
