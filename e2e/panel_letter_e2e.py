@@ -124,6 +124,66 @@ def wait_js(browser: Browser, expr: str, timeout: float = 8):
         time.sleep(0.1)
     raise Fail(f"等了 {timeout}s 还没有：{expr}（最后是 {last!r}）")
 
+DELIVERED_BODY = "# 已送达的信\n\n这封信已经送到浩年那边了，待发箱早就清空。\n\nDELIVERED_BODY_CANARY\n"
+
+
+def delivered_stage(browser: Browser) -> None:
+    """真的发一封带附件的信，等对方收下、待发箱清空，再在发信人的状态页里点开：正文还在。"""
+    from harness import pair, xlt
+
+    work = WORK / "pair"
+    work.mkdir(parents=True, exist_ok=True)
+    nes, hao = pair(work, 47990)
+    attach = work / "report.txt"
+    attach.write_text("附件内容 hello\n", encoding="utf-8")
+    try:
+        nes.start()
+        hao.start()
+        r = xlt(nes.home, "send", "--to", "haonian", "--type", "ask", "--subject", "已送达的那封", "--text", DELIVERED_BODY, "--attach", str(attach))
+        out = json.loads(r.stdout)
+        msg_id = out.get("id") or out.get("msg_id")
+        if not msg_id:
+            raise Fail("发信没有返回编号：" + r.stdout)
+        wait_for(lambda: len([e for e in hao.inbox_envs() if e["id"] == msg_id]) == 1, 40, "对方没有收到信")
+        wait_for(lambda: not nes.pending_files(), 20, "送达后待发箱应清空")
+        if (nes.home / "pending" / "haonian-win" / f"{msg_id}.letter.md").exists():
+            raise Fail("待发箱里的信纸应已删除（这才是要验证的场景）")
+        copy = nes.home / "sent" / f"{msg_id}.letter.md"
+        env_copy = nes.home / "sent" / f"{msg_id}.env.json"
+        if not copy.exists() or "DELIVERED_BODY_CANARY" not in copy.read_text(encoding="utf-8"):
+            raise Fail("发信时没有在 ~/.xlt/sent/ 留下正文副本")
+        env = json.loads(env_copy.read_text(encoding="utf-8"))
+        if not any(a.get("source") == str(attach.resolve()) for a in env.get("attachments") or []):
+            raise Fail(f"信封副本里没有附件的本机来源路径：{env.get('attachments')}")
+        if (copy.stat().st_mode & 0o077) or (env_copy.stat().st_mode & 0o077):
+            raise Fail("副本文件权限应只有本人可读写")
+        say("发信时在 ~/.xlt/sent/ 留了正文和信封副本（含附件来源路径，仅本人可读）")
+
+        page = f"http://127.0.0.1:{nes.panel}/"
+        browser.js(f"location.href = {page + '#sent:' + msg_id!r}; true")
+        wait_js(browser, "document.querySelector('#letter-pane.open .letter-body') && document.querySelector('#letter-pane.open').innerText.indexOf('DELIVERED_BODY_CANARY') >= 0", timeout=15)
+        text = browser.js("document.querySelector('#letter-pane').innerText")
+        if "正文已不在本机" in text:
+            raise Fail("已送达的信不应再提示正文不在本机")
+        if "report.txt" not in text or str(attach.resolve()) not in text:
+            raise Fail("附件文件名或本机路径没有列出：" + text)
+        if not any(w in text for w in ("已送达", "已读")):
+            raise Fail("状态应是已送达/已读：" + text)
+        if SHOTS.exists():
+            browser.js("document.querySelector('#inbox') && document.querySelector('#sent').scrollIntoView({block:'start'}); true")
+            browser.screenshot(SHOTS / "v6-sent-delivered.png")
+        say("通过 已送达的信：待发箱已清空，在「已发出」里点开仍能看到正文和附件")
+
+        # 命令行：xlt sent <编号> 也能看到正文
+        shown = xlt(nes.home, "sent", msg_id)
+        if shown.returncode != 0 or "DELIVERED_BODY_CANARY" not in shown.stdout:
+            raise Fail("xlt sent <编号> 没有打印正文：" + shown.stdout + shown.stderr)
+        say("通过 xlt sent <编号> 打印发出的信的正文")
+    finally:
+        for node in (nes, hao):
+            if node.proc:
+                node.proc.stop()
+
 
 def main() -> int:
     fresh(WORK)
@@ -208,8 +268,8 @@ def main() -> int:
         # 深链接：直接打开带 hash 的地址
         browser.js("window.__xltProbe = 'keep'; true")
         browser.js(f"location.hash = '#sent:{SENT_GONE_ID}'; true")
-        wait_js(browser, "document.querySelector('#letter-pane.open .letter-missing') && document.querySelector('#letter-pane.open').innerText.indexOf('正文已不在本机') >= 0")
-        say("通过 已发出但正文不在本机时提示「正文已不在本机」")
+        wait_js(browser, "document.querySelector('#letter-pane.open .letter-missing') && document.querySelector('#letter-pane.open').innerText.indexOf('更新前发出') >= 0 && document.querySelector('#letter-pane.open').innerText.indexOf('正文已不在本机') >= 0")
+        say("通过 更新前发出、没有副本的信：提示「这封信是在更新前发出的，当时没留正文副本」")
 
         browser.js(f"location.hash = '#pending:{PENDING_ID}'; true")
         wait_js(browser, "document.querySelector('#letter-pane.open .letter-body') && document.querySelector('#letter-pane.open').innerText.indexOf('PENDING_BODY_CANARY') >= 0")
@@ -292,6 +352,7 @@ def main() -> int:
         wait_js(browser, "!(document.querySelector('#letter-pane.open'))")
         say("通过 点 × 关闭")
 
+        delivered_stage(browser)
         print("PANEL LETTER E2E 全部通过")
         return 0
     finally:

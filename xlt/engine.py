@@ -50,6 +50,7 @@ from xlt.store import (
     member_by_name,
     peer_cert,
     remember_sent,
+    save_sent_copy,
     resolve_person,
 )
 
@@ -657,6 +658,10 @@ class Engine:
             atomic_text(folder / f"{msg_id}.letter.md", letter or "")
             env_path = folder / f"{msg_id}.env.json"
             write_json(env_path, stored)
+            try:
+                save_sent_copy(self.home, msg_id, letter or "", stored)
+            except OSError as exc:
+                self.log(f"没能留下发出信的本机副本 {msg_id}：{exc}")
             remember_sent(
                 self.home,
                 {

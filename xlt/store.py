@@ -67,6 +67,11 @@ class Home:
         return self.root / "pending"
 
     @property
+    def sent(self) -> Path:
+        """发出的信的本机副本：<消息编号>.letter.md + .env.json。送达后待发箱的文件会删，这里留着。"""
+        return self.root / "sent"
+
+    @property
     def outbox(self) -> Path:
         return self.root / "outbox"
 
@@ -84,6 +89,7 @@ class Home:
             "pending",
             "pending/expired",
             "pending/failed",
+            "sent",
             "outbox",
             "channels",
             "secrets",
@@ -377,3 +383,12 @@ def load_sent(home: Home) -> list[dict]:
 
 def remember_sent(home: Home, row: dict) -> None:
     append_jsonl(home.root / "sent.jsonl", row)
+
+
+def save_sent_copy(home: Home, msg_id: str, letter: str, env: dict) -> None:
+    """发信时在本机留一份正文和信封（只在本机，不上网）。让「已发出」里的信送达之后还能点开看。"""
+    from xlt.common import atomic_text
+
+    home.sent.mkdir(parents=True, exist_ok=True)
+    atomic_text(home.sent / f"{msg_id}.letter.md", letter or "")
+    write_json(home.sent / f"{msg_id}.env.json", env)

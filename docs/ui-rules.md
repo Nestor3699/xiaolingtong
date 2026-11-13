@@ -315,3 +315,13 @@ auth.css `:root`：
 - 信纸位置：收到的在 `~/.xlt/inbox/<窗口>/msg-….letter.md`（也包括 `_hold`、`_expired`）；发出还没送到的在 `~/.xlt/pending/…/*.letter.md`。已发出只在 `sent.jsonl` 里留下信封时，常常已经没有信纸。附件在 `~/.xlt/inbox/<消息编号>/attachments/`。
 - 图标继续用 Lucide：关闭是 `x`，附件是 `paperclip`。v4 的旧页面规则仍然有效（样式表链在 `.app` 里、关键布局写在元素上、版本号对不上就整页刷新一次）。
 - 验证：`e2e/panel_letter_e2e.py`（真通讯员 + 真浏览器）。截图：`/workspace/xlt-ui/v5-letter.png`、`v5-letter-sidebar-reader.png`。
+
+### 12.1 发出的信的本机副本（v5.1）
+
+送达之后待发箱里的文件会删，`sent.jsonl` 只记信封，所以以前的「已发出」点开就是「正文已不在本机」。现在发信时（`engine.local_send`）在 `~/.xlt/sent/<消息编号>.letter.md` 和 `.env.json` 各留一份副本（权限只有本人可读写，信封里含附件列表和附件的本机来源路径，不走网络、不多发任何东西）。
+
+- 「已发出」读取顺序：本机副本 → 待发箱 → 只有 `sent.jsonl` 信封。
+- 都没有时：待发箱也没有的，写「这封信是在更新前发出的，当时没留正文副本，正文已不在本机」（更新前发出的旧信无法找回）。
+- 命令行：`xlt sent <消息编号>` 打印这封信的正文。
+- 副本目前不自动清理；以后要做的话按时间或数量清，不要动 `sent.jsonl`。
+- 验证：`e2e/panel_letter_e2e.py` 的最后一段（真发一封带附件的信、等送达、待发箱清空，再在状态页点开）。截图：`/workspace/xlt-ui/v6-sent-delivered.png`。

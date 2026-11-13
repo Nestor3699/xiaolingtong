@@ -130,7 +130,9 @@ def main(argv=None) -> int:
     read = sub.add_parser("read", help="读一封收到的信（打印信纸，并告诉发信人「已读」）")
     read.add_argument("msg_id")
     read.set_defaults(func=cmd_read)
-    sub.add_parser("sent", help="我发出的信：待送达 / 已送达 / 已读").set_defaults(func=cmd_sent)
+    sent = sub.add_parser("sent", help="我发出的信：待送达 / 已送达 / 已读；给消息编号就打印那封信的正文")
+    sent.add_argument("msg_id", nargs="?", help="可选：看某一封发出的信的正文（来自本机副本）")
+    sent.set_defaults(func=cmd_sent)
     sub.add_parser("peers").set_defaults(func=cmd_peers)
     sub.add_parser("outbox").set_defaults(func=cmd_outbox)
 
@@ -519,6 +521,21 @@ def cmd_read(home: Home, args) -> int:
 
 
 def cmd_sent(home: Home, args) -> int:
+    if getattr(args, "msg_id", None):
+        from xlt.panel import letter_view
+
+        view, code = letter_view(home, "sent", args.msg_id)
+        if code != 200:
+            print(view["error"]["message"], file=sys.stderr)
+            return 1
+        print(f"消息 {view['id']}  发给 {view['to_member'] or view['to']}  类型 {view['type']}  标题 {view['subject'] or '—'}  状态 {view['status_label']}")
+        if view["body_missing"]:
+            print(view["body_missing_note"])
+        else:
+            print("~~~~")
+            print(view["body"])
+            print("~~~~")
+        return 0
     rows = collect(home).get("sent") or []
     if not rows:
         print("还没有发出过信。")

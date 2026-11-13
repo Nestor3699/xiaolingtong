@@ -204,7 +204,7 @@ def _read_body(path: Path) -> tuple[str, bool]:
     return data.decode("utf-8", errors="replace"), truncated
 
 
-def _attach_entries(home: Home, env: dict) -> list[dict]:
+def _attach_entries(home: Home, env: dict, box: str = "inbox") -> list[dict]:
     from xlt.attach import attachment_dir
 
     out: list[dict] = []
@@ -216,7 +216,7 @@ def _attach_entries(home: Home, env: dict) -> list[dict]:
         seen.add(name)
         seen.add(str(path))
         out.append({"name": name, "size": int(item.get("size") or 0), "path": str(path)})
-    if dest_dir.exists():
+    if box == "inbox" and dest_dir.exists():
         for file in sorted(dest_dir.iterdir()):
             if not file.is_file() or file.name in seen or str(file) in seen:
                 continue
@@ -245,17 +245,35 @@ def letter_view(home: Home, box: str, msg_id: str) -> tuple[dict, int]:
     if not _safe_msg_id(msg_id):
         return {"error": {"code": "BAD_ID", "message": "消息编号不对"}}, 400
 
-    env_path = _find_box_env(home, "inbox" if box == "inbox" else "pending", msg_id)
+    pending_env = _find_box_env(home, "pending", msg_id) if box != "inbox" else None
     sent_row = _sent_meta(home, msg_id) if box == "sent" else None
-    if env_path is None and not sent_row:
+    copy_env = home.sent / f"{msg_id}.env.json"
+    copy_letter = home.sent / f"{msg_id}.letter.md"
+    has_copy = box != "inbox" and (copy_letter.exists() or copy_env.exists())
+    if box == "inbox":
+        env_path = _find_box_env(home, "inbox", msg_id)
+    else:
+        env_path = pending_env
+    if env_path is None and not sent_row and not has_copy:
         return {"error": {"code": "NOT_FOUND", "message": "本机没有这封信"}}, 404
 
-    env = read_json(env_path, {}) if env_path else dict(sent_row or {})
+    # 发出的信：先看本机副本（发信时留的），再看待发箱，最后只剩 sent.jsonl 的信封
+    if box != "inbox" and has_copy:
+        env = read_json(copy_env, None) or (read_json(env_path, {}) if env_path else dict(sent_row or {}))
+    else:
+        env = read_json(env_path, {}) if env_path else dict(sent_row or {})
     if box == "inbox" and env_path is not None:
         receipts.mark_read_local(home, msg_id, via="panel")
         env = read_json(env_path, {}) or env
 
-    letter_path = env_path.with_name(f"{msg_id}.letter.md") if env_path else None
+    letter_path = None
+    if box == "inbox":
+        letter_path = env_path.with_name(f"{msg_id}.letter.md") if env_path else None
+    else:
+        for cand in (copy_letter, env_path.with_name(f"{msg_id}.letter.md") if env_path else None):
+            if cand is not None and cand.exists():
+                letter_path = cand
+                break
     body = ""
     missing = True
     truncated = False
@@ -263,6 +281,14 @@ def letter_view(home: Home, box: str, msg_id: str) -> tuple[dict, int]:
     if letter_path is not None and letter_path.exists():
         missing = False
         body, truncated = _read_body(letter_path)
+    missing_note = ""
+    if missing:
+        if box == "inbox":
+            missing_note = "正文已不在本机"
+        elif env_path is None and not has_copy:
+            missing_note = "这封信是在更新前发出的，当时没留正文副本，正文已不在本机"
+        else:
+            missing_note = "正文已不在本机"
 
     read, read_at = False, None
     if box == "inbox" and env_path is not None:
@@ -302,9 +328,10 @@ def letter_view(home: Home, box: str, msg_id: str) -> tuple[dict, int]:
         "window": window,
         "body": body,
         "body_missing": missing,
+        "body_missing_note": missing_note,
         "body_truncated": truncated,
         "body_path": body_path,
-        "attachments": _attach_entries(home, env) if env_path else [],
+        "attachments": _attach_entries(home, env, box) if (env_path or has_copy) else [],
     }, 200
 
 
@@ -1313,7 +1340,7 @@ LIVE_JS = r"""(function () {
     if (data.body_missing) {
       var miss = document.createElement("p");
       miss.className = "letter-missing";
-      miss.textContent = "正文已不在本机";
+      miss.textContent = data.body_missing_note || "正文已不在本机";
       body.appendChild(miss);
       if (data.body_path) {
         var path = document.createElement("p");
